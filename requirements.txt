@@ -1,7 +1,6 @@
 # ── Core Data ─────────────────────────────────────────────────────────────────
 pandas>=2.0.0
 numpy>=1.26.0
-pandas-datareader>=0.10.0
 yfinance>=0.2.40
 fredapi>=0.5.1
 requests>=2.31.0
