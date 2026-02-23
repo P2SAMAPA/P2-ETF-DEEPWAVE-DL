@@ -2,8 +2,11 @@ name: Sync to HF Space
 
 on:
   push:
-    branches: [main]        # fires on every push to main
-  workflow_dispatch:        # allow manual trigger too
+    branches: [main]
+    paths-ignore:
+      - 'models/**'        # never sync binary weights to Space
+      - 'data/**'          # never sync parquet data to Space
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -14,22 +17,60 @@ jobs:
       - name: Checkout repo (full history)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0    # full history needed for git push mirror
+          fetch-depth: 0
 
-      - name: Push to HF Space via git
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install huggingface-hub
+        run: pip install huggingface-hub
+
+      - name: Push code files to HF Space (no binary weights)
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          # Configure git
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          python - <<'EOF'
+          from huggingface_hub import HfApi, CommitOperationAdd
+          import os
 
-          # Add HF Space as a remote using token auth
-          git remote add hf_space \
-            https://P2SAMAPA:${HF_TOKEN}@huggingface.co/spaces/P2SAMAPA/P2-ETF-DEEPWAVE-DL
+          HF_TOKEN      = os.environ["HF_TOKEN"]
+          HF_SPACE_REPO = "P2SAMAPA/P2-ETF-DEEPWAVE-DL"
 
-          # Force-push main → HF Space main branch
-          # (HF Spaces runs from the main branch by default)
-          git push hf_space main --force
+          api = HfApi(token=HF_TOKEN)
 
-          echo "✅ GitHub → HF Space sync complete."
+          # Only push code + config files — never .keras / .pkl / parquet
+          code_files = [
+              "app.py", "config.py", "preprocess.py",
+              "model_a.py", "model_b.py", "model_c.py",
+              "train.py", "evaluate.py", "predict.py",
+              "daily_update.py", "data_download.py", "data_upload_hf.py",
+              "requirements.txt", "Dockerfile", "README.md",
+          ]
+
+          # Also include any json result files if they exist
+          for jf in ["evaluation_results.json", "latest_prediction.json",
+                     "models/training_summary.json"]:
+              if os.path.exists(jf):
+                  code_files.append(jf)
+
+          ops = []
+          for f in code_files:
+              if os.path.exists(f):
+                  ops.append(CommitOperationAdd(
+                      path_in_repo=f,
+                      path_or_fileobj=f,
+                  ))
+
+          if ops:
+              api.create_commit(
+                  repo_id        = HF_SPACE_REPO,
+                  repo_type      = "space",
+                  operations     = ops,
+                  commit_message = "[auto] Sync code from GitHub",
+              )
+              print(f"✅ Pushed {len(ops)} files to HF Space")
+          else:
+              print("Nothing to push.")
+          EOF
