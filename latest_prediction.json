@@ -1,0 +1,59 @@
+{
+  "as_of_date": "2026-02-20",
+  "winner_model": "model_a",
+  "final_signal": "GLD",
+  "final_confidence": 0.2001,
+  "tsl_status": {
+    "two_day_cumul_pct": 8.91,
+    "tsl_triggered": false,
+    "in_cash": false,
+    "current_z": 1.83,
+    "z_reentry": 1.1,
+    "tsl_pct": 10
+  },
+  "tbill_rate": 3.61,
+  "predictions": {
+    "model_a": {
+      "model": "model_a",
+      "lookback": 30,
+      "signal": "GLD",
+      "confidence": 0.2001,
+      "z_score": 1.83,
+      "probabilities": {
+        "TLT": 0.2,
+        "TBT": 0.2,
+        "VNQ": 0.2,
+        "GLD": 0.2001,
+        "SLV": 0.1999
+      }
+    },
+    "model_b": {
+      "model": "model_b",
+      "lookback": 30,
+      "signal": "TLT",
+      "confidence": 0.2001,
+      "z_score": 1.762,
+      "probabilities": {
+        "TLT": 0.2001,
+        "TBT": 0.2,
+        "VNQ": 0.2,
+        "GLD": 0.1999,
+        "SLV": 0.2
+      }
+    },
+    "model_c": {
+      "model": "model_c",
+      "lookback": 45,
+      "signal": "VNQ",
+      "confidence": 0.2022,
+      "z_score": 1.723,
+      "probabilities": {
+        "TLT": 0.1989,
+        "TBT": 0.1989,
+        "VNQ": 0.2022,
+        "GLD": 0.1994,
+        "SLV": 0.2007
+      }
+    }
+  }
+}
