@@ -1,39 +1,117 @@
 # predict.py
 # Generates next-trading-day ETF signal from saved model weights.
-# Loads latest data from HF or local, runs wavelet preprocessing,
-# and returns predictions for all 3 models.
-# Usage:
-#   python predict.py
-#   python predict.py --tsl 12 --z 1.2
+# Downloads weights from HF Dataset if not available locally.
 
 import argparse
 import json
 import os
-from datetime import datetime
+import shutil
+from datetime import datetime, date, timedelta
 
 import numpy as np
 import pandas as pd
 
 import config
 from data_download import load_local
-from preprocess import (build_features, apply_scaler,
-                         load_scaler, run_preprocessing)
+from preprocess import build_features, apply_scaler, load_scaler, run_preprocessing
 import model_a, model_b, model_c
-from evaluate import softmax_probs, z_score
+
+US_HOLIDAYS = {
+    date(2025,1,1), date(2025,1,20), date(2025,2,17), date(2025,4,18),
+    date(2025,5,26), date(2025,6,19), date(2025,7,4), date(2025,9,1),
+    date(2025,11,27), date(2025,12,25),
+    date(2026,1,1), date(2026,1,19), date(2026,2,16), date(2026,4,3),
+    date(2026,5,25), date(2026,6,19), date(2026,7,3), date(2026,9,7),
+    date(2026,11,26), date(2026,12,25),
+}
+
+def next_trading_day(from_date=None):
+    d = from_date or date.today()
+    d += timedelta(days=1)
+    while d.weekday() >= 5 or d in US_HOLIDAYS:
+        d += timedelta(days=1)
+    return d
 
 
-def load_latest_data() -> dict:
-    """Try local first, then download incrementally."""
-    data = load_local()
-    if not data:
-        print("No local data found — running incremental download...")
-        from data_download import incremental_update
-        data = incremental_update()
-    return data
+# ─── Download weights from HF Dataset ────────────────────────────────────────
 
+def download_weights_from_hf():
+    """Pull all .keras and .pkl weight files from HF Dataset into local models/."""
+    try:
+        from huggingface_hub import HfApi, hf_hub_download, list_repo_tree
+        token = config.HF_TOKEN or None
+        print("  Downloading weights from HF Dataset...")
+
+        # List all files in the dataset repo
+        api = HfApi(token=token)
+        files = api.list_repo_files(
+            repo_id   = config.HF_DATASET_REPO,
+            repo_type = "dataset",
+            token     = token,
+        )
+
+        for f in files:
+            if f.endswith(('.keras', '.pkl', '.json')) and \
+               (f.startswith('models/') or f == 'models/training_summary.json'):
+                local_path = f
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                try:
+                    dl = hf_hub_download(
+                        repo_id   = config.HF_DATASET_REPO,
+                        filename  = f,
+                        repo_type = "dataset",
+                        token     = token,
+                    )
+                    shutil.copy(dl, local_path)
+                    print(f"    ✓ {f}")
+                except Exception as e:
+                    print(f"    ✗ {f}: {e}")
+        print("  Weights download complete.")
+    except Exception as e:
+        print(f"  WARNING: Could not download weights from HF: {e}")
+
+
+def download_data_from_hf():
+    """Pull parquet files from HF Dataset into local data/."""
+    try:
+        from huggingface_hub import hf_hub_download
+        token = config.HF_TOKEN or None
+        os.makedirs(config.DATA_DIR, exist_ok=True)
+        files = ["etf_price","etf_ret","etf_vol",
+                 "bench_price","bench_ret","bench_vol","macro"]
+        for f in files:
+            try:
+                dl = hf_hub_download(
+                    repo_id   = config.HF_DATASET_REPO,
+                    filename  = f"data/{f}.parquet",
+                    repo_type = "dataset",
+                    token     = token,
+                )
+                shutil.copy(dl, os.path.join(config.DATA_DIR, f"{f}.parquet"))
+                print(f"    ✓ data/{f}.parquet")
+            except Exception as e:
+                print(f"    ✗ data/{f}: {e}")
+    except Exception as e:
+        print(f"  WARNING: Could not download data from HF: {e}")
+
+
+# ─── Softmax + Z-score ───────────────────────────────────────────────────────
+
+def softmax_probs(preds: np.ndarray) -> np.ndarray:
+    e = np.exp(preds - preds.max(axis=1, keepdims=True))
+    return e / e.sum(axis=1, keepdims=True)
+
+
+def z_score_val(probs: np.ndarray) -> float:
+    top   = probs.max()
+    mu    = probs.mean()
+    sigma = probs.std() + 1e-8
+    return float((top - mu) / sigma)
+
+
+# ─── Best lookbacks ───────────────────────────────────────────────────────────
 
 def get_best_lookbacks() -> dict:
-    """Read best lookbacks from training summary."""
     summary_path = os.path.join(config.MODELS_DIR, "training_summary.json")
     if os.path.exists(summary_path):
         with open(summary_path) as f:
@@ -46,96 +124,129 @@ def get_best_lookbacks() -> dict:
     return {k: config.DEFAULT_LOOKBACK for k in ["model_a","model_b","model_c"]}
 
 
+# ─── Single model inference ───────────────────────────────────────────────────
+
 def predict_one(module, tag: str, data: dict,
                 lookback: int, is_dual: bool) -> dict:
-    """Run inference on the very last window of data."""
     try:
         m = module.load_model(lookback)
     except Exception as e:
         print(f"  [{tag}] Could not load model: {e}")
         return {}
 
-    scaler   = load_scaler(lookback)
-    features = build_features(data)
+    try:
+        scaler   = load_scaler(lookback)
+        features = build_features(data)
+        window   = features.iloc[-lookback:].values
+        if len(window) < lookback:
+            print(f"  [{tag}] Not enough data for lookback={lookback}")
+            return {}
 
-    # Take last `lookback` rows
-    window = features.iloc[-lookback:].values          # (lookback, F)
-    if len(window) < lookback:
-        print(f"  [{tag}] Not enough data for lookback={lookback}")
+        N, F = 1, window.shape[1]
+        X    = apply_scaler(window.reshape(1, lookback, F), scaler)
+
+        if is_dual:
+            n_etf  = (len(config.ETFS) * 2) * (config.WAVELET_LEVELS + 1)
+            inputs = [X[:, :, :n_etf], X[:, :, n_etf:]]
+        else:
+            inputs = X
+
+        preds = m.predict(inputs, verbose=0)       # (1, 5)
+        probs = softmax_probs(preds)[0]            # (5,)
+        z     = z_score_val(probs)
+        top_i = int(np.argmax(probs))
+        etf   = config.ETFS[top_i]
+        conf  = float(probs[top_i])
+
+        prob_dict = {config.ETFS[i]: round(float(probs[i]), 4)
+                     for i in range(len(config.ETFS))}
+
+        return dict(
+            model        = tag,
+            lookback     = lookback,
+            signal       = etf,
+            confidence   = round(conf, 4),
+            z_score      = round(z, 3),
+            probabilities= prob_dict,
+        )
+    except Exception as e:
+        print(f"  [{tag}] Inference error: {e}")
         return {}
 
-    N, F = 1, window.shape[1]
-    X    = apply_scaler(window.reshape(1, lookback, F), scaler)  # (1, lb, F)
 
-    if is_dual:
-        n_etf = (len(config.ETFS) * 2) * (config.WAVELET_LEVELS + 1)
-        inputs= [X[:, :, :n_etf], X[:, :, n_etf:]]
-    else:
-        inputs = X
+# ─── TSL check ───────────────────────────────────────────────────────────────
 
-    preds = m.predict(inputs, verbose=0)               # (1, 5)
-    probs = softmax_probs(preds)                       # (1, 5)
-    z     = float(z_score(probs)[0])
-    top_i = int(np.argmax(probs[0]))
-    etf   = config.ETFS[top_i]
-    conf  = float(probs[0][top_i])
+def check_tsl_status(data, tsl_pct, z_reentry, current_z):
+    ret_df  = data["etf_ret"][config.ETFS] if "etf_ret" in data else pd.DataFrame()
+    if ret_df.empty:
+        return dict(two_day_cumul_pct=0, tsl_triggered=False,
+                    in_cash=False, current_z=current_z,
+                    z_reentry=z_reentry, tsl_pct=tsl_pct)
 
-    prob_dict = {config.ETFS[i]: round(float(probs[0][i]), 4)
-                 for i in range(len(config.ETFS))}
+    # Normalize columns
+    from preprocess import normalize_etf_columns
+    ret_df = normalize_etf_columns(ret_df)
+    etf_cols = [c for c in config.ETFS if c in ret_df.columns]
+    if not etf_cols:
+        return dict(two_day_cumul_pct=0, tsl_triggered=False,
+                    in_cash=False, current_z=current_z,
+                    z_reentry=z_reentry, tsl_pct=tsl_pct)
 
-    return dict(
-        model       = tag,
-        lookback    = lookback,
-        signal      = etf,
-        confidence  = round(conf, 4),
-        z_score     = round(z, 3),
-        probabilities = prob_dict,
-    )
-
-
-def check_tsl_status(data: dict,
-                     tsl_pct: float,
-                     z_reentry: float,
-                     current_z: float) -> dict:
-    """
-    Check if trailing stop loss is currently triggered.
-    Uses last 2 days of ETF returns (most recently held ETF).
-    """
-    ret_df  = data["etf_ret"][config.ETFS]
-    last2   = ret_df.iloc[-2:]
-    # Use max-return ETF as proxy for what was held
-    held_etf= last2.iloc[-1].idxmax()
-    two_day = float(last2[held_etf].sum()) * 100
-
+    last2     = ret_df[etf_cols].iloc[-2:]
+    held_etf  = last2.iloc[-1].idxmax()
+    two_day   = float(last2[held_etf].sum()) * 100
     triggered = two_day <= -tsl_pct
-    can_reenter = current_z >= z_reentry
+    in_cash   = triggered and (current_z < z_reentry)
 
     return dict(
         two_day_cumul_pct = round(two_day, 2),
         tsl_triggered     = triggered,
-        in_cash           = triggered and not can_reenter,
+        in_cash           = in_cash,
         current_z         = round(current_z, 3),
         z_reentry         = z_reentry,
         tsl_pct           = tsl_pct,
     )
 
 
-def run_predict(tsl_pct: float   = config.DEFAULT_TSL_PCT,
-                z_reentry: float = config.DEFAULT_Z_REENTRY) -> dict:
+# ─── Main ────────────────────────────────────────────────────────────────────
+
+def run_predict(tsl_pct=config.DEFAULT_TSL_PCT,
+                z_reentry=config.DEFAULT_Z_REENTRY) -> dict:
 
     print(f"\n{'='*60}")
     print(f"  Predict — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  TSL={tsl_pct}%  Z-reentry={z_reentry}σ")
     print(f"{'='*60}")
 
-    data      = load_latest_data()
+    # Download data + weights from HF if not present locally
+    data = load_local()
+    if not data:
+        print("\n  No local data — downloading from HF Dataset...")
+        download_data_from_hf()
+        data = load_local()
+    if not data:
+        print("  ERROR: No data available.")
+        return {}
+
+    # Check if weights exist locally; if not, download
+    summary_path = os.path.join(config.MODELS_DIR, "training_summary.json")
+    has_weights  = os.path.exists(summary_path)
+    if not has_weights:
+        print("\n  No local weights — downloading from HF Dataset...")
+        download_weights_from_hf()
+
     lookbacks = get_best_lookbacks()
     last_date = data["etf_ret"].index.max().date()
-    tbill_val = float(data["macro"]["TBILL_3M"].iloc[-1]) \
-                if "TBILL_3M" in data["macro"].columns else 3.6
+    next_td   = next_trading_day(last_date)
+    tbill_val = 3.6
+    try:
+        from preprocess import normalize_etf_columns, flatten_columns
+        macro = flatten_columns(data["macro"].copy())
+        if "TBILL_3M" in macro.columns:
+            tbill_val = float(macro["TBILL_3M"].iloc[-1])
+    except Exception:
+        pass
 
     predictions = {}
-
     for tag, module, is_dual in [
         ("model_a", model_a, False),
         ("model_b", model_b, False),
@@ -147,34 +258,30 @@ def run_predict(tsl_pct: float   = config.DEFAULT_TSL_PCT,
             predictions[tag] = res
             print(f"  [{tag.upper()}] Signal={res['signal']}  "
                   f"Conf={res['confidence']:.1%}  Z={res['z_score']:.2f}σ")
+        else:
+            print(f"  [{tag.upper()}] No prediction generated")
 
-    # Determine winner model
-    summary_path = os.path.join(config.MODELS_DIR, "training_summary.json")
-    winner_model = "model_b"   # default
-    if os.path.exists(summary_path):
-        eval_path = "evaluation_results.json"
-        if os.path.exists(eval_path):
-            with open(eval_path) as f:
-                ev = json.load(f)
-            winner_model = ev.get("winner", "model_b")
+    # Winner from evaluation results
+    winner_model = "model_a"
+    eval_path    = "evaluation_results.json"
+    if os.path.exists(eval_path):
+        with open(eval_path) as f:
+            ev = json.load(f)
+        winner_model = ev.get("winner", "model_a")
 
-    # TSL check using winner model Z
-    current_z = predictions.get(winner_model, {}).get("z_score", 1.5)
+    current_z  = predictions.get(winner_model, {}).get("z_score", 0.0)
     tsl_status = check_tsl_status(data, tsl_pct, z_reentry, current_z)
 
-    # Final signal (winner model, unless TSL active → CASH)
     if tsl_status["in_cash"]:
         final_signal     = "CASH"
         final_confidence = None
-        final_return     = tbill_val / 252  # daily T-bill accrual
     else:
-        wp = predictions.get(winner_model, {})
+        wp               = predictions.get(winner_model, {})
         final_signal     = wp.get("signal", "—")
         final_confidence = wp.get("confidence")
-        final_return     = None
 
     output = dict(
-        as_of_date       = str(last_date),
+        as_of_date       = str(next_td),
         winner_model     = winner_model,
         final_signal     = final_signal,
         final_confidence = final_confidence,
@@ -183,10 +290,15 @@ def run_predict(tsl_pct: float   = config.DEFAULT_TSL_PCT,
         predictions      = predictions,
     )
 
-    # Save
     with open("latest_prediction.json", "w") as f:
         json.dump(output, f, indent=2, default=str)
-    print(f"\n  Final signal: {final_signal}")
+
+    print(f"\n  Next trading day : {next_td}")
+    print(f"  Final signal     : {final_signal}")
+    if predictions:
+        for tag, p in predictions.items():
+            print(f"  [{tag.upper()}] {p['signal']} | "
+                  f"conf={p['confidence']:.1%} | z={p['z_score']:.2f}σ")
     print(f"  Saved → latest_prediction.json")
     return output
 
