@@ -330,7 +330,7 @@ with st.sidebar:
 
     z_reentry = st.slider(
         "📶 Z-score Re-entry Threshold",
-        min_value=1.0, max_value=2.0,
+        min_value=0.80, max_value=2.0,
         value=st.session_state.z_reentry,
         step=0.1, format="%.1f σ",
         key="z_slider",
