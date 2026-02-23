@@ -97,8 +97,10 @@ def download_data_from_hf():
 
 # ─── Softmax + Z-score ───────────────────────────────────────────────────────
 
-def softmax_probs(preds: np.ndarray) -> np.ndarray:
-    e = np.exp(preds - preds.max(axis=1, keepdims=True))
+def softmax_probs(preds: np.ndarray, temperature: float = 0.1) -> np.ndarray:
+    """Temperature-scaled softmax. Low temperature sharpens small differences."""
+    scaled = preds / (temperature + 1e-8)
+    e = np.exp(scaled - scaled.max(axis=1, keepdims=True))
     return e / e.sum(axis=1, keepdims=True)
 
 
