@@ -218,6 +218,61 @@ def apply_tsl_to_audit(audit: list, tsl_pct: float,
     return df
 
 
+# ─── Download weights + data from HF Dataset on startup ─────────────────────
+
+@st.cache_resource
+def ensure_weights_and_data():
+    """
+    On HF Space startup: pull latest weights + data from HF Dataset.
+    Cached so it only runs once per session.
+    """
+    import shutil
+    from huggingface_hub import HfApi, hf_hub_download
+
+    token = config.HF_TOKEN or None
+    downloaded = {"weights": 0, "data": 0}
+
+    # ── Data parquets ─────────────────────────────────────────────────────────
+    os.makedirs(config.DATA_DIR, exist_ok=True)
+    for f in ["etf_price","etf_ret","etf_vol",
+              "bench_price","bench_ret","bench_vol","macro"]:
+        local = os.path.join(config.DATA_DIR, f"{f}.parquet")
+        if not os.path.exists(local):
+            try:
+                dl = hf_hub_download(
+                    repo_id=config.HF_DATASET_REPO,
+                    filename=f"data/{f}.parquet",
+                    repo_type="dataset", token=token)
+                shutil.copy(dl, local)
+                downloaded["data"] += 1
+            except Exception:
+                pass
+
+    # ── Model weights + scalers ───────────────────────────────────────────────
+    try:
+        api   = HfApi(token=token)
+        files = api.list_repo_files(
+            repo_id=config.HF_DATASET_REPO,
+            repo_type="dataset", token=token)
+        for f in files:
+            if f.startswith("models/") and                f.endswith((".keras", ".pkl", ".json")):
+                local = f
+                if not os.path.exists(local):
+                    os.makedirs(os.path.dirname(local), exist_ok=True)
+                    try:
+                        dl = hf_hub_download(
+                            repo_id=config.HF_DATASET_REPO,
+                            filename=f, repo_type="dataset", token=token)
+                        shutil.copy(dl, local)
+                        downloaded["weights"] += 1
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+    return downloaded
+
+
 # ─── Session state for instant risk recalc ───────────────────────────────────
 if "tsl_pct" not in st.session_state:
     st.session_state.tsl_pct   = 10
@@ -366,6 +421,12 @@ with st.sidebar:
 
 # ─── MAIN PANEL ───────────────────────────────────────────────────────────────
 
+# Ensure weights + data are present on HF Space
+with st.spinner("🔄 Loading model weights from HF Dataset..."):
+    dl_status = ensure_weights_and_data()
+if dl_status["weights"] > 0 or dl_status["data"] > 0:
+    st.cache_data.clear()   # refresh cached data after new downloads
+
 st.markdown("# 🧠 P2-ETF-DEEPWAVE-DL")
 st.caption("Option A: Wavelet-CNN-LSTM · "
            "Option B: Wavelet-Attention-CNN-LSTM · "
@@ -379,11 +440,27 @@ evalu = load_evaluation()
 # Correct next trading day
 next_td   = next_trading_day()
 last_td   = last_trading_day()
-as_of     = pred.get("as_of_date", str(last_td))
+as_of     = pred.get("as_of_date", str(next_td))   # use next trading day
 winner    = evalu.get("winner", "model_a")
 tbill_rt  = pred.get("tbill_rate", 3.6)
 preds     = pred.get("predictions", {})
 tsl_stat  = pred.get("tsl_status", {})
+
+# If prediction is stale or empty, run predict.py inline
+pred_date = pred.get("as_of_date", "")
+needs_refresh = (not preds) or (pred_date and pred_date < str(next_td))
+if needs_refresh:
+    try:
+        from predict import run_predict
+        fresh = run_predict(tsl_pct=tsl_pct, z_reentry=z_reentry)
+        if fresh and fresh.get("predictions"):
+            pred  = fresh
+            preds = fresh.get("predictions", {})
+            tsl_stat = fresh.get("tsl_status", {})
+            tbill_rt = fresh.get("tbill_rate", 3.6)
+            as_of    = str(next_td)
+    except Exception as e:
+        pass   # silently fall back to cached prediction
 
 # TSL state
 live_z       = preds.get(winner, {}).get("z_score", 1.5)
