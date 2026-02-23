@@ -1,6 +1,7 @@
 # evaluate.py
 import json
 import os
+import shutil
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -9,6 +10,53 @@ import config
 from data_download import load_local
 from preprocess import run_preprocessing
 import model_a, model_b, model_c
+
+
+# ─── HF download helper ───────────────────────────────────────────────────────
+
+def download_from_hf_if_needed():
+    """Download data + weights from HF Dataset if not present locally."""
+    try:
+        from huggingface_hub import HfApi, hf_hub_download
+        token = config.HF_TOKEN or None
+
+        # Data parquets
+        os.makedirs(config.DATA_DIR, exist_ok=True)
+        for f in ["etf_price","etf_ret","etf_vol",
+                  "bench_price","bench_ret","bench_vol","macro"]:
+            local = os.path.join(config.DATA_DIR, f"{f}.parquet")
+            if not os.path.exists(local):
+                try:
+                    dl = hf_hub_download(
+                        repo_id=config.HF_DATASET_REPO,
+                        filename=f"data/{f}.parquet",
+                        repo_type="dataset", token=token)
+                    shutil.copy(dl, local)
+                    print(f"  Downloaded data/{f}.parquet")
+                except Exception as e:
+                    print(f"  Warning data/{f}: {e}")
+
+        # Model weights
+        os.makedirs(config.MODELS_DIR, exist_ok=True)
+        api   = HfApi(token=token)
+        files = api.list_repo_files(
+            repo_id=config.HF_DATASET_REPO,
+            repo_type="dataset", token=token)
+        for f in files:
+            if f.startswith("models/") and f.endswith((".keras",".pkl",".json")):
+                local = f
+                if not os.path.exists(local):
+                    os.makedirs(os.path.dirname(local), exist_ok=True)
+                    try:
+                        dl = hf_hub_download(
+                            repo_id=config.HF_DATASET_REPO,
+                            filename=f, repo_type="dataset", token=token)
+                        shutil.copy(dl, local)
+                        print(f"  Downloaded {f}")
+                    except Exception as e:
+                        print(f"  Warning {f}: {e}")
+    except Exception as e:
+        print(f"  WARNING: HF download failed: {e}")
 
 
 # ─── Signal generation ────────────────────────────────────────────────────────
@@ -20,14 +68,25 @@ def raw_signals(model, prep, is_dual=False):
         inputs = [X_te[:, :, :n], X_te[:, :, n:]]
     else:
         inputs = X_te
-    return model.predict(inputs, verbose=0)   # (N, 5)
+    preds = model.predict(inputs, verbose=0)   # (N, 5)
+    # Diagnostic
+    pred_std = preds.std(axis=0).mean()
+    print(f"  Raw pred std per ETF: {preds.std(axis=0).round(6)}")
+    if pred_std < 1e-4:
+        print(f"  WARNING: Near-uniform predictions (std={pred_std:.6f}) — possible weight/scaler mismatch")
+    return preds
 
 
-def softmax_probs(preds):
-    """Row-wise softmax → probabilities sum to 1."""
-    preds = np.array(preds)
-    # Subtract row max for numerical stability
-    e = np.exp(preds - preds.max(axis=1, keepdims=True))
+def softmax_probs(preds, temperature=0.1):
+    """
+    Temperature-scaled softmax.
+    Models predict small log-return values (~1e-4 scale).
+    temperature=0.1 amplifies differences so argmax ETF gets meaningfully
+    higher probability than uniform 0.2.
+    """
+    preds  = np.array(preds)
+    scaled = preds / (temperature + 1e-8)
+    e      = np.exp(scaled - scaled.max(axis=1, keepdims=True))
     return e / e.sum(axis=1, keepdims=True)   # (N, 5)
 
 
@@ -190,6 +249,9 @@ def run_evaluation(tsl_pct=config.DEFAULT_TSL_PCT,
           f"Fee={fee_bps}bps")
     print(f"{'='*60}")
 
+    # Download data + weights from HF if not available locally
+    download_from_hf_if_needed()
+
     data = load_local()
     if not data:
         raise RuntimeError("No data. Run data_download.py first.")
@@ -234,8 +296,15 @@ def run_evaluation(tsl_pct=config.DEFAULT_TSL_PCT,
         preds = raw_signals(m, prep, is_dual=is_dual)
         probs = softmax_probs(preds)
 
+        # Check if model is producing meaningful predictions
+        prob_std = probs.std(axis=1).mean()
         print(f"  probs sample (first 3 rows):\n{probs[:3]}")
         print(f"  z_scores sample: {compute_z_scores(probs[:5])}")
+        print(f"  Mean prob std across ETFs: {prob_std:.4f}  "
+              f"(>0.05 = model discriminating, ~0 = uniform = weights issue)")
+        if prob_std < 0.01:
+            print(f"  WARNING: Model {tag} outputting near-uniform probabilities!")
+            print(f"  This usually means the model weights are not loaded correctly.")
 
         bt = backtest(probs, prep["d_te"], etf_ret, tbill,
                       fee_bps=fee_bps, tsl_pct=tsl_pct,
@@ -246,10 +315,68 @@ def run_evaluation(tsl_pct=config.DEFAULT_TSL_PCT,
         print(f"  Signals distribution:\n{bt['Signal'].value_counts()}")
 
         metrics = compute_metrics(bt, bench_ret, tbill)
+        # Extend audit trail with LIVE recent dates beyond test set
+        # Test set ends at ~10% of total data from end.
+        # We run inference on the most recent 60 trading days too.
+        live_records = []
+        try:
+            from preprocess import build_features, apply_scaler, load_scaler
+            features   = build_features(data)
+            scaler     = load_scaler(lb)
+            recent_dates = features.index[-60:]   # last 60 trading days
+            for dt in recent_dates:
+                if dt in prep["d_te"]:
+                    continue   # already in test set
+                idx = features.index.get_loc(dt)
+                if idx < lb:
+                    continue
+                window = features.iloc[idx - lb : idx].values.astype(np.float32)
+                X_win  = apply_scaler(window.reshape(1, lb, -1), scaler)
+                if is_dual:
+                    n_e = prep["n_etf_features"]
+                    inp = [X_win[:, :, :n_e], X_win[:, :, n_e:]]
+                else:
+                    inp = X_win
+                raw = m.predict(inp, verbose=0)
+                pr  = softmax_probs(raw)[0]
+                zi  = float((pr.max() - pr.mean()) / (pr.std() + 1e-8))
+                ei  = int(np.argmax(pr))
+                etf_name = config.ETFS[ei]
+                # Get actual return if available
+                if "etf_ret" in data:
+                    from preprocess import normalize_etf_columns
+                    er = normalize_etf_columns(data["etf_ret"].copy())
+                    ec = [c for c in config.ETFS if c in er.columns]
+                    if etf_name in ec and dt in er.index:
+                        actual_ret = float(er.loc[dt, etf_name])
+                    else:
+                        actual_ret = 0.0
+                else:
+                    actual_ret = 0.0
+                live_records.append(dict(
+                    Date       = str(dt.date()),
+                    Signal     = etf_name,
+                    Confidence = round(float(pr[ei]), 4),
+                    Z_Score    = round(zi, 4),
+                    Two_Day_Cumul_Pct = 0.0,
+                    Mode       = "ETF",
+                    Net_Return = round(actual_ret, 6),
+                    TSL_Triggered = False,
+                ))
+        except Exception as ex:
+            print(f"  Live extension warning: {ex}")
+
+        # Merge test set + live records, sort, take last 30
+        all_rows  = bt.to_dict(orient="records") + live_records
+        all_df    = pd.DataFrame(all_rows)
+        all_df["Date"] = pd.to_datetime(all_df["Date"])
+        all_df    = all_df.sort_values("Date").drop_duplicates("Date")
+        audit_30  = all_df.tail(30).to_dict(orient="records")
+
         results[tag] = dict(
             metrics     = metrics,
             lookback    = lb,
-            audit_tail  = bt.tail(20).to_dict(orient="records"),
+            audit_tail  = audit_30,
             all_signals = bt.to_dict(orient="records"),
         )
         print(f"    Ann={metrics['ann_return']}%  "
