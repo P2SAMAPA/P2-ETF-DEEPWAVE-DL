@@ -1,0 +1,148 @@
+name: Train Models
+
+on:
+  workflow_run:
+    workflows: ["Daily Data Update"]
+    types: [completed]
+  workflow_dispatch:          # Allow manual trigger
+    inputs:
+      model:
+        description: "Which model to train (all / a / b / c)"
+        required: false
+        default: "all"
+      epochs:
+        description: "Max epochs"
+        required: false
+        default: "80"
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    # Only run if the triggering workflow succeeded (or manual)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    timeout-minutes: 360      # 6 hours max for heavy training
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download latest data from HF
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: |
+          python - <<'EOF'
+          from huggingface_hub import hf_hub_download
+          import os, shutil, config
+
+          files = ["etf_price","etf_ret","etf_vol",
+                   "bench_price","bench_ret","bench_vol","macro"]
+          os.makedirs("data", exist_ok=True)
+          for f in files:
+              try:
+                  path = hf_hub_download(
+                      repo_id=config.HF_DATASET_REPO,
+                      filename=f"data/{f}.parquet",
+                      repo_type="dataset",
+                      token=config.HF_TOKEN,
+                  )
+                  shutil.copy(path, f"data/{f}.parquet")
+                  print(f"  Downloaded {f}.parquet")
+              except Exception as e:
+                  print(f"  Warning: {f} not found on HF: {e}")
+          EOF
+
+      - name: Train all models
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+        run: |
+          MODEL="${{ github.event.inputs.model || 'all' }}"
+          EPOCHS="${{ github.event.inputs.epochs || '80' }}"
+          python train.py --model $MODEL --epochs $EPOCHS
+
+      - name: Run evaluation
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+        run: python evaluate.py
+
+      - name: Run prediction
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+        run: python predict.py
+
+      - name: Push weights + results to Hugging Face
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: python data_upload_hf.py --weights
+
+      - name: Commit models + results to GitHub repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add models/ evaluation_results.json latest_prediction.json || true
+          git diff --cached --quiet || \
+            git commit -m "[auto] Retrain complete — $(date -u +%Y-%m-%d)"
+          git push || true
+
+      - name: Push updated app to HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python - <<'EOF'
+          from huggingface_hub import HfApi, CommitOperationAdd
+          import glob, config
+
+          api = HfApi(token=config.HF_TOKEN)
+
+          # Files to push to HF Space
+          space_files = (
+              ["app.py", "config.py", "preprocess.py",
+               "model_a.py", "model_b.py", "model_c.py",
+               "predict.py", "evaluate.py",
+               "requirements.txt",
+               "evaluation_results.json",
+               "latest_prediction.json"] +
+              glob.glob("models/**/*.keras", recursive=True) +
+              glob.glob("models/**/*.pkl",   recursive=True) +
+              glob.glob("models/**/*.json",  recursive=True)
+          )
+
+          operations = []
+          import os
+          for f in space_files:
+              if os.path.exists(f):
+                  operations.append(CommitOperationAdd(
+                      path_in_repo=f,
+                      path_or_fileobj=f,
+                  ))
+
+          if operations:
+              api.create_commit(
+                  repo_id=config.HF_SPACE_REPO,
+                  repo_type="space",
+                  operations=operations,
+                  commit_message="[auto] Deploy updated models to HF Space",
+              )
+              print(f"  Pushed {len(operations)} files to HF Space.")
+          EOF
+
+      - name: Done
+        run: echo "✅ Training pipeline complete."
