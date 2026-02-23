@@ -218,6 +218,14 @@ def apply_tsl_to_audit(audit: list, tsl_pct: float,
     return df
 
 
+# ─── Session state for instant risk recalc ───────────────────────────────────
+if "tsl_pct" not in st.session_state:
+    st.session_state.tsl_pct   = 10
+if "z_reentry" not in st.session_state:
+    st.session_state.z_reentry = 1.1
+if "last_eval" not in st.session_state:
+    st.session_state.last_eval = {}
+
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -256,17 +264,23 @@ with st.sidebar:
 
     tsl_pct = st.slider(
         "🔴 Trailing Stop Loss (2-day cumul.)",
-        min_value=0, max_value=25, value=10, step=1,
-        format="%d%%",
-        help="Shift to CASH if 2-day cumulative return ≤ −X%"
+        min_value=0, max_value=25,
+        value=st.session_state.tsl_pct,
+        step=1, format="%d%%",
+        help="Shift to CASH if 2-day cumulative return ≤ −X%",
+        key="tsl_slider",
     )
+    st.session_state.tsl_pct = tsl_pct
     st.caption(f"Triggers CASH if 2-day cumulative return ≤ −{tsl_pct}%")
 
     z_reentry = st.slider(
         "📶 Z-score Re-entry Threshold",
-        min_value=1.0, max_value=2.0, value=1.1, step=0.1,
-        format="%.1f σ",
+        min_value=1.0, max_value=2.0,
+        value=st.session_state.z_reentry,
+        step=0.1, format="%.1f σ",
+        key="z_slider",
     )
+    st.session_state.z_reentry = z_reentry
     st.caption(f"Exit CASH → ETF when Z ≥ {z_reentry:.1f} σ. "
                f"CASH earns 3m T-bill.")
 
@@ -281,26 +295,56 @@ with st.sidebar:
         f"Split fixed at 80/10/10."
     )
 
-    # ── RUN BUTTON ────────────────────────────────────────────────────────────
-    run_btn = st.button("🚀 Run All 3 Models",
+    # ── BUTTON 1: Recalculate Risk (instant — no retraining) ─────────────────
+    st.markdown(
+        "<div style='font-size:11px;color:#888;margin-bottom:4px;'>"
+        "TSL / Z-score changes apply instantly:</div>",
+        unsafe_allow_html=True
+    )
+    recalc_btn = st.button("🔄 Recalculate Risk Controls",
+                            use_container_width=True)
+    if recalc_btn:
+        st.cache_data.clear()
+        st.success(f"✅ Risk recalculated — TSL={tsl_pct}%  Z={z_reentry:.1f}σ")
+        st.rerun()
+    st.caption(
+        "↑ Instant. Re-applies TSL / Z-score to audit trail, "
+        "cumulative chart and hero card. No retraining needed."
+    )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── BUTTON 2: Retrain Models (triggers GitHub Actions) ────────────────────
+    st.markdown(
+        "<div style='font-size:11px;color:#888;margin-bottom:4px;'>"
+        "Change wavelet / start year / epochs then retrain:</div>",
+        unsafe_allow_html=True
+    )
+    run_btn = st.button("🚀 Retrain All 3 Models",
                          use_container_width=True, type="primary")
     if run_btn:
         with st.spinner("Triggering GitHub Actions training pipeline..."):
             ok = trigger_github_training(
-                start_year  = start_year,
-                wavelet     = wavelet_key,
-                tsl_pct     = tsl_pct,
-                z_reentry   = z_reentry,
-                epochs      = max_epochs,
-                fee_bps     = fee_bps,
+                start_year = start_year,
+                wavelet    = wavelet_key,
+                tsl_pct    = tsl_pct,
+                z_reentry  = z_reentry,
+                epochs     = max_epochs,
+                fee_bps    = fee_bps,
             )
         if ok:
-            st.success("✅ Training triggered! Check GitHub Actions. "
-                       "Results will update here in ~1-2 hours.")
+            st.success("✅ Retraining triggered! Check GitHub Actions. "
+                       "Results update here in ~1-2 hours.")
         else:
-            st.warning("⚠️ Could not trigger GitHub Actions automatically. "
-                       "Go to GitHub → Actions → Train Models → Run workflow manually. "
-                       "(Add GITHUB_TOKEN to HF Space secrets to enable auto-trigger.)")
+            st.warning(
+                "⚠️ Could not auto-trigger GitHub Actions. "
+                "Go to GitHub → Actions → Train Models → Run workflow. "
+                "To enable auto-trigger: add GITHUB_TOKEN to HF Space secrets."
+            )
+    st.caption(
+        "↑ Triggers full retrain with current Start Year / Wavelet / Epochs. "
+        "Takes ~1-2 hrs. Also runs automatically daily at 02:00 UTC."
+    )
 
     st.divider()
 
