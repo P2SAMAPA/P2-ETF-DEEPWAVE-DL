@@ -3,9 +3,7 @@ title: P2-ETF-DEEPWAVE-DL
 emoji: 🧠
 colorFrom: green
 colorTo: indigo
-sdk: streamlit
-sdk_version: 1.35.0
-app_file: app.py
+sdk: docker
 pinned: true
 license: mit
 ---
