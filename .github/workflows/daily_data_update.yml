@@ -1,1 +1,39 @@
+name: Daily Data Update
 
+on:
+  schedule:
+    - cron: "0 2 * * 1-5"   # 2:00 AM UTC, Mon–Fri (markets close ~21:00 UTC)
+  workflow_dispatch:         # Allow manual trigger
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily update (incremental data + prediction)
+        env:
+          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: python daily_update.py
+
+      - name: Commit latest_prediction.json to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add latest_prediction.json evaluation_results.json || true
+          git diff --cached --quiet || git commit -m "[auto] Daily prediction update $(date -u +%Y-%m-%d)"
+          git push || true
