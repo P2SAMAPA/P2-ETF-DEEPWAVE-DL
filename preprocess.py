@@ -1,7 +1,4 @@
 # preprocess.py
-# Wavelet decomposition (db4, 3-level) + feature engineering + sequence windowing
-# Produces X (features) and y (next-day ETF returns) ready for model training.
-
 import os
 import numpy as np
 import pandas as pd
@@ -15,42 +12,56 @@ os.makedirs(config.DATA_DIR, exist_ok=True)
 os.makedirs(config.MODELS_DIR, exist_ok=True)
 
 
+# ─── Flatten MultiIndex columns (yfinance sometimes returns these) ────────────
+
+def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Flatten MultiIndex columns to simple strings."""
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join([str(c) for c in col if c != '']).strip('_')
+                      for col in df.columns]
+    df.columns = [str(c) for c in df.columns]
+    return df
+
+
 # ─── Wavelet decomposition ────────────────────────────────────────────────────
 
-def wavelet_decompose(series: np.ndarray,
-                      wavelet: str = config.WAVELET,
-                      level: int   = config.WAVELET_LEVELS) -> np.ndarray:
+def wavelet_decompose_1d(series: np.ndarray,
+                          wavelet: str = config.WAVELET,
+                          level: int   = config.WAVELET_LEVELS) -> np.ndarray:
     """
-    Decompose 1-D series using DWT.
-    Returns array of shape (len(series), level+1):
-      col 0  = approximation coefficients (A_level), reconstructed to original length
-      col 1..level = detail coefficients (D_level .. D_1), reconstructed
+    Decompose a 1-D series using DWT.
+    Returns array of shape (len(series), level+1).
     """
+    series = series.astype(float)
     coeffs = pywt.wavedec(series, wavelet, level=level)
     reconstructed = []
     for i, c in enumerate(coeffs):
-        # Reconstruct each sub-band back to original signal length
         zeros = [np.zeros_like(cc) for cc in coeffs]
         zeros[i] = c
         rec = pywt.waverec(zeros, wavelet)
-        # Trim / pad to match original length
         rec = rec[:len(series)]
         if len(rec) < len(series):
             rec = np.pad(rec, (0, len(series) - len(rec)))
         reconstructed.append(rec)
-    return np.stack(reconstructed, axis=1)   # (T, level+1)
+    # stack → (T, level+1), all values are 1-D
+    out = np.stack(reconstructed, axis=1)
+    assert out.ndim == 2, f"Expected 2D, got {out.shape}"
+    return out
 
 
 def apply_wavelet_to_df(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Apply wavelet decomposition to every column in df.
-    Returns expanded DataFrame with columns:
-      original_col_A3, original_col_D1, original_col_D2, original_col_D3
+    Apply wavelet decomposition column-by-column.
+    Each column expands into (level+1) columns:
+      col_A3, col_D3, col_D2, col_D1
     """
+    df = flatten_columns(df)
     parts = []
     for col in df.columns:
-        decomp = wavelet_decompose(df[col].values)   # (T, 4)
-        labels = [f"{col}_A3", f"{col}_D3", f"{col}_D2", f"{col}_D1"]
+        series = df[col].values.flatten().astype(float)
+        decomp = wavelet_decompose_1d(series)          # (T, 4)
+        labels = [f"{col}_A3", f"{col}_D3",
+                  f"{col}_D2", f"{col}_D1"]
         part = pd.DataFrame(decomp, index=df.index, columns=labels)
         parts.append(part)
     return pd.concat(parts, axis=1)
@@ -59,31 +70,23 @@ def apply_wavelet_to_df(df: pd.DataFrame) -> pd.DataFrame:
 # ─── Feature builder ─────────────────────────────────────────────────────────
 
 def build_features(data: dict) -> pd.DataFrame:
-    """
-    Merge ETF returns, ETF vol, macro into one feature DataFrame.
-    Apply wavelet decomposition to all columns.
-    Returns combined wavelet-expanded feature matrix.
-    """
-    etf_ret   = data["etf_ret"]
-    etf_vol   = data["etf_vol"]
-    macro     = data["macro"]
+    etf_ret = flatten_columns(data["etf_ret"].copy())
+    etf_vol = flatten_columns(data["etf_vol"].copy())
+    macro   = flatten_columns(data["macro"].copy())
 
-    # Align on common dates
+    # Keep only expected ETF columns
+    etf_ret = etf_ret[[c for c in config.ETFS if c in etf_ret.columns]]
+    etf_vol = etf_vol[[c for c in config.ETFS if c in etf_vol.columns]]
+
     combined = pd.concat([etf_ret, etf_vol, macro], axis=1).dropna()
-
-    # Apply wavelet to all signals
     wavelet_features = apply_wavelet_to_df(combined)
-
     return wavelet_features
 
 
 def build_targets(data: dict) -> pd.DataFrame:
-    """
-    Target = next-day log return for each ETF (5 outputs).
-    Shift by -1 so row t predicts t+1.
-    """
-    targets = data["etf_ret"][config.ETFS].shift(-1)
-    return targets
+    tgt = flatten_columns(data["etf_ret"].copy())
+    tgt = tgt[[c for c in config.ETFS if c in tgt.columns]]
+    return tgt.shift(-1)
 
 
 # ─── Sequence windowing ───────────────────────────────────────────────────────
@@ -91,25 +94,15 @@ def build_targets(data: dict) -> pd.DataFrame:
 def make_sequences(features: pd.DataFrame,
                    targets:  pd.DataFrame,
                    lookback: int) -> tuple:
-    """
-    Build sliding window sequences.
-    X shape: (N, lookback, n_features)
-    y shape: (N, n_etfs)
-    dates:   (N,) — date of prediction target (t+1)
-    """
-    feat_arr = features.values
-    tgt_arr  = targets.values
-
-    # Align indices
-    common = features.index.intersection(targets.dropna().index)
+    common   = features.index.intersection(targets.dropna().index)
     features = features.loc[common]
     targets  = targets.loc[common].dropna()
     common   = features.index.intersection(targets.index)
     features = features.loc[common]
     targets  = targets.loc[common]
 
-    feat_arr = features.values
-    tgt_arr  = targets.values
+    feat_arr = features.values.astype(np.float32)
+    tgt_arr  = targets.values.astype(np.float32)
     dates    = features.index
 
     X, y, d = [], [], []
@@ -118,20 +111,19 @@ def make_sequences(features: pd.DataFrame,
         y.append(tgt_arr[i])
         d.append(dates[i])
 
-    return np.array(X, dtype=np.float32), \
-           np.array(y, dtype=np.float32), \
-           np.array(d)
+    return (np.array(X, dtype=np.float32),
+            np.array(y, dtype=np.float32),
+            np.array(d))
 
 
 # ─── Train / Val / Test split ─────────────────────────────────────────────────
 
 def split_data(X, y, dates,
-               train_frac: float = config.TRAIN_SPLIT,
-               val_frac:   float = config.VAL_SPLIT):
+               train_frac=config.TRAIN_SPLIT,
+               val_frac=config.VAL_SPLIT):
     N     = len(X)
     t_end = int(N * train_frac)
     v_end = int(N * (train_frac + val_frac))
-
     return (X[:t_end],  y[:t_end],  dates[:t_end],
             X[t_end:v_end], y[t_end:v_end], dates[t_end:v_end],
             X[v_end:],  y[v_end:],  dates[v_end:])
@@ -139,8 +131,7 @@ def split_data(X, y, dates,
 
 # ─── Scaler ───────────────────────────────────────────────────────────────────
 
-def fit_scaler(X_train: np.ndarray, lookback: int) -> StandardScaler:
-    """Fit StandardScaler on flattened training sequences."""
+def fit_scaler(X_train: np.ndarray) -> StandardScaler:
     N, L, F = X_train.shape
     scaler = StandardScaler()
     scaler.fit(X_train.reshape(-1, F))
@@ -152,36 +143,20 @@ def apply_scaler(X: np.ndarray, scaler: StandardScaler) -> np.ndarray:
     return scaler.transform(X.reshape(-1, F)).reshape(N, L, F)
 
 
-def save_scaler(scaler: StandardScaler, lookback: int):
+def save_scaler(scaler, lookback):
     path = os.path.join(config.MODELS_DIR, f"scaler_lb{lookback}.pkl")
     joblib.dump(scaler, path)
     print(f"  Scaler saved → {path}")
 
 
-def load_scaler(lookback: int) -> StandardScaler:
+def load_scaler(lookback):
     path = os.path.join(config.MODELS_DIR, f"scaler_lb{lookback}.pkl")
     return joblib.load(path)
 
 
-# ─── ETF / Macro feature splits (for Model C dual-stream) ─────────────────────
-
-def split_streams(X: np.ndarray, n_etf_features: int) -> tuple:
-    """
-    Split X into ETF stream and Macro stream for Model C.
-    n_etf_features = number of wavelet-expanded ETF columns
-    """
-    X_etf   = X[:, :, :n_etf_features]
-    X_macro = X[:, :, n_etf_features:]
-    return X_etf, X_macro
-
-
-# ─── Full pipeline ─────────────────────────────────────────────────────────────
+# ─── Full pipeline ────────────────────────────────────────────────────────────
 
 def run_preprocessing(data: dict, lookback: int) -> dict:
-    """
-    End-to-end preprocessing for a given lookback window.
-    Returns dict with all splits + scaler + stream info.
-    """
     print(f"\nPreprocessing with lookback={lookback}d ...")
 
     features = build_features(data)
@@ -193,15 +168,14 @@ def run_preprocessing(data: dict, lookback: int) -> dict:
      X_va, y_va, d_va,
      X_te, y_te, d_te) = split_data(X, y, dates)
 
-    scaler  = fit_scaler(X_tr, lookback)
+    scaler  = fit_scaler(X_tr)
     X_tr_sc = apply_scaler(X_tr, scaler)
     X_va_sc = apply_scaler(X_va, scaler)
     X_te_sc = apply_scaler(X_te, scaler)
     save_scaler(scaler, lookback)
 
-    # Number of wavelet-expanded ETF columns
-    # Each ETF signal → (ret + vol) → 2 raw cols × (WAVELET_LEVELS+1) wavelet bands
-    n_etf_raw      = len(config.ETFS) * 2                           # ret + vol per ETF
+    # ETF wavelet feature count: (ret + vol) per ETF × (levels+1) bands
+    n_etf_raw      = len(config.ETFS) * 2
     n_etf_features = n_etf_raw * (config.WAVELET_LEVELS + 1)
 
     print(f"  X shape : {X_tr_sc.shape}  |  y shape: {y_tr.shape}")
@@ -217,7 +191,7 @@ def run_preprocessing(data: dict, lookback: int) -> dict:
         n_features=X_tr_sc.shape[2],
         n_etf_features=n_etf_features,
         lookback=lookback,
-        feature_names=list(build_features(data).columns),
+        feature_names=list(features.columns),
     )
 
 
@@ -225,11 +199,9 @@ if __name__ == "__main__":
     from data_download import load_local
     data = load_local()
     if not data:
-        print("No local data found. Run data_download.py first.")
+        print("No local data. Run data_download.py first.")
     else:
         for lb in config.LOOKBACKS:
             result = run_preprocessing(data, lb)
-            print(f"  Lookback {lb}d ready. "
-                  f"Train={len(result['X_tr'])} "
-                  f"Val={len(result['X_va'])} "
-                  f"Test={len(result['X_te'])}")
+            print(f"  lb={lb}d  Train={len(result['X_tr'])}  "
+                  f"Val={len(result['X_va'])}  Test={len(result['X_te'])}")
