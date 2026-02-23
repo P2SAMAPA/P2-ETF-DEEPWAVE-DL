@@ -4,25 +4,44 @@ on:
   workflow_run:
     workflows: ["Daily Data Update"]
     types: [completed]
-  workflow_dispatch:          # Allow manual trigger
+  workflow_dispatch:
     inputs:
       model:
-        description: "Which model to train (all / a / b / c)"
+        description: "Which model (all / a / b / c)"
         required: false
         default: "all"
       epochs:
         description: "Max epochs"
         required: false
         default: "80"
+      start_year:
+        description: "Start year for training data"
+        required: false
+        default: "2008"
+      wavelet:
+        description: "Wavelet type (db4 / db2 / haar / sym5)"
+        required: false
+        default: "db4"
+      tsl_pct:
+        description: "Trailing stop loss %"
+        required: false
+        default: "10"
+      z_reentry:
+        description: "Z-score re-entry threshold"
+        required: false
+        default: "1.1"
+      fee_bps:
+        description: "Transaction fee in bps"
+        required: false
+        default: "10"
 
 jobs:
   train:
     runs-on: ubuntu-latest
-    # Only run if the triggering workflow succeeded (or manual)
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
-    timeout-minutes: 360      # 6 hours max for heavy training
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repo
@@ -45,7 +64,6 @@ jobs:
           python - <<'EOF'
           from huggingface_hub import hf_hub_download
           import os, shutil, config
-
           files = ["etf_price","etf_ret","etf_vol",
                    "bench_price","bench_ret","bench_vol","macro"]
           os.makedirs("data", exist_ok=True)
@@ -60,88 +78,103 @@ jobs:
                   shutil.copy(path, f"data/{f}.parquet")
                   print(f"  Downloaded {f}.parquet")
               except Exception as e:
-                  print(f"  Warning: {f} not found on HF: {e}")
+                  print(f"  Warning: {f}: {e}")
           EOF
+
+      - name: Write runtime config overrides
+        run: |
+          cat >> config.py << CFGEOF
+
+          # ── Runtime overrides from UI (injected by GitHub Actions) ──────────
+          import os as _os
+          _START_YEAR = int(_os.getenv("START_YEAR", "2008"))
+          _WAVELET    = _os.getenv("WAVELET", "db4")
+          _TSL_PCT    = float(_os.getenv("TSL_PCT", "10"))
+          _Z_REENTRY  = float(_os.getenv("Z_REENTRY", "1.1"))
+          _FEE_BPS    = float(_os.getenv("FEE_BPS", "10"))
+          WAVELET     = _WAVELET
+          DEFAULT_TSL_PCT    = _TSL_PCT
+          DEFAULT_Z_REENTRY  = _Z_REENTRY
+          CFGEOF
+
+        env:
+          START_YEAR: ${{ github.event.inputs.start_year || '2008' }}
+          WAVELET:    ${{ github.event.inputs.wavelet    || 'db4' }}
+          TSL_PCT:    ${{ github.event.inputs.tsl_pct    || '10' }}
+          Z_REENTRY:  ${{ github.event.inputs.z_reentry  || '1.1' }}
+          FEE_BPS:    ${{ github.event.inputs.fee_bps    || '10' }}
 
       - name: Train all models
         env:
           HF_TOKEN:        ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
           FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+          START_YEAR:      ${{ github.event.inputs.start_year || '2008' }}
+          WAVELET:         ${{ github.event.inputs.wavelet    || 'db4' }}
         run: |
-          MODEL="${{ github.event.inputs.model || 'all' }}"
-          EPOCHS="${{ github.event.inputs.epochs || '80' }}"
-          python train.py --model $MODEL --epochs $EPOCHS
+          python train.py \
+            --model "${{ github.event.inputs.model || 'all' }}" \
+            --epochs "${{ github.event.inputs.epochs || '80' }}"
 
       - name: Run evaluation
         env:
           HF_TOKEN:        ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
           FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-        run: python evaluate.py
+        run: |
+          python evaluate.py \
+            --tsl  "${{ github.event.inputs.tsl_pct   || '10' }}" \
+            --z    "${{ github.event.inputs.z_reentry  || '1.1' }}" \
+            --fee  "${{ github.event.inputs.fee_bps    || '10' }}"
 
       - name: Run prediction
         env:
           HF_TOKEN:        ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
           FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-        run: python predict.py
+        run: |
+          python predict.py \
+            --tsl "${{ github.event.inputs.tsl_pct  || '10' }}" \
+            --z   "${{ github.event.inputs.z_reentry || '1.1' }}"
 
-      - name: Push weights + results to Hugging Face
+      - name: Push weights + results to HF Dataset
         env:
           HF_TOKEN:        ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: python data_upload_hf.py --weights
 
-      - name: Commit models + results to GitHub repo
+      - name: Commit models + results to GitHub
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add models/ evaluation_results.json latest_prediction.json || true
           git diff --cached --quiet || \
-            git commit -m "[auto] Retrain complete — $(date -u +%Y-%m-%d)"
+            git commit -m "[auto] Retrain — $(date -u +%Y-%m-%d) wavelet=${{ github.event.inputs.wavelet || 'db4' }}"
           git push || true
 
-      - name: Push updated app to HF Space
+      - name: Push to HF Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python - <<'EOF'
           from huggingface_hub import HfApi, CommitOperationAdd
-          import glob, config
-
+          import glob, os, config
           api = HfApi(token=config.HF_TOKEN)
-
-          # Files to push to HF Space
-          space_files = (
-              ["app.py", "config.py", "preprocess.py",
-               "model_a.py", "model_b.py", "model_c.py",
-               "predict.py", "evaluate.py",
-               "requirements.txt",
-               "evaluation_results.json",
-               "latest_prediction.json"] +
-              glob.glob("models/**/*.keras", recursive=True) +
-              glob.glob("models/**/*.pkl",   recursive=True) +
-              glob.glob("models/**/*.json",  recursive=True)
-          )
-
-          operations = []
-          import os
-          for f in space_files:
-              if os.path.exists(f):
-                  operations.append(CommitOperationAdd(
-                      path_in_repo=f,
-                      path_or_fileobj=f,
-                  ))
-
-          if operations:
+          files = (["app.py","config.py","preprocess.py",
+                    "model_a.py","model_b.py","model_c.py",
+                    "predict.py","evaluate.py","requirements.txt",
+                    "evaluation_results.json","latest_prediction.json"] +
+                   glob.glob("models/**/*.keras", recursive=True) +
+                   glob.glob("models/**/*.pkl",   recursive=True))
+          ops = [CommitOperationAdd(path_in_repo=f, path_or_fileobj=f)
+                 for f in files if os.path.exists(f)]
+          if ops:
               api.create_commit(
-                  repo_id=config.HF_SPACE_REPO,
-                  repo_type="space",
-                  operations=operations,
-                  commit_message="[auto] Deploy updated models to HF Space",
+                  repo_id=config.HF_SPACE_REPO, repo_type="space",
+                  operations=ops,
+                  commit_message="[auto] Deploy updated models",
               )
-              print(f"  Pushed {len(operations)} files to HF Space.")
+              print(f"Pushed {len(ops)} files to HF Space")
           EOF
 
       - name: Done
