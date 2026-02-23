@@ -44,6 +44,10 @@ def fetch_prices(tickers: list, start: str, end: str) -> pd.DataFrame:
         raise RuntimeError("No price data fetched.")
 
     prices = pd.concat(frames, axis=1)
+    # Flatten MultiIndex columns from yfinance
+    if isinstance(prices.columns, pd.MultiIndex):
+        prices.columns = [col[1] if col[1] else col[0] for col in prices.columns]
+    prices.columns = [str(c).strip() for c in prices.columns]
     prices.index = pd.to_datetime(prices.index)
     prices.index.name = "Date"
     prices.index = prices.index.tz_localize(None) \
@@ -116,9 +120,17 @@ def build_dataset(start: str, end: str) -> dict:
     )
 
 
+def _flatten_cols(df):
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [col[0] if col[1]==col[0] else '_'.join([str(c) for c in col if c])
+                      for col in df.columns]
+    df.columns = [str(c) for c in df.columns]
+    return df
+
 def save_local(data: dict):
     os.makedirs(config.DATA_DIR, exist_ok=True)
     for name, df in data.items():
+        df = _flatten_cols(df.copy())
         path = os.path.join(config.DATA_DIR, f"{name}.parquet")
         df.to_parquet(path)
         print(f"  Saved {path}  ({len(df)} rows)")
@@ -184,3 +196,10 @@ if __name__ == "__main__":
         incremental_update()
 
     print("\nDone.")
+
+# ─── Debug helper ─────────────────────────────────────────────────────────────
+
+def print_data_summary(data: dict):
+    """Print column names for debugging."""
+    for key, df in data.items():
+        print(f"  [{key}] shape={df.shape}  cols={list(df.columns)[:8]}")
