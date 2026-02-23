@@ -98,6 +98,15 @@ jobs:
           DEFAULT_Z_REENTRY = float(_os.getenv("Z_REENTRY", "1.1"))
           CFGEOF
 
+      - name: Incremental data update (catch up to today)
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+        run: |
+          python data_download.py --mode incremental
+          python data_upload_hf.py
+
       - name: Train all models
         env:
           HF_TOKEN:        ${{ secrets.HF_TOKEN }}
