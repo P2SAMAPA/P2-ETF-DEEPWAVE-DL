@@ -1,1 +1,37 @@
+name: Seed Data (One-Time)
 
+on:
+  workflow_dispatch:   # Manual trigger only
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download full dataset (2008 → today)
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          HF_TOKEN:     ${{ secrets.HF_TOKEN }}
+        run: python data_download.py --mode seed
+
+      - name: Push data to Hugging Face
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: python data_upload_hf.py
+
+      - name: Confirm upload
+        run: echo "✅ Seed complete. Data uploaded to HF."
