@@ -1,6 +1,5 @@
-# model_a.py — Option A: Wavelet-CNN-LSTM (CLASSIFICATION)
-# Output: softmax over 5 ETF classes. Loss: sparse_categorical_crossentropy.
-# This prevents near-zero MSE collapse.
+# model_a.py — Option A: Wavelet-CNN-LSTM
+# Classification: predict which ETF has highest next-day return (class 0-4)
 
 import os
 import numpy as np
@@ -16,21 +15,32 @@ N_CLASSES  = len(config.ETFS)   # 5
 def build_model(lookback: int, n_features: int) -> keras.Model:
     inp = keras.Input(shape=(lookback, n_features), name="input")
 
+    # CNN block
     x = layers.Conv1D(64, kernel_size=3, padding="causal",
                       activation="relu", name="conv1")(inp)
+    x = layers.BatchNormalization()(x)
     x = layers.Conv1D(64, kernel_size=3, padding="causal",
                       activation="relu", name="conv2")(x)
+    x = layers.BatchNormalization()(x)
     x = layers.MaxPooling1D(pool_size=2, name="pool")(x)
+    x = layers.Dropout(0.2)(x)
+
+    # LSTM block
     x = layers.LSTM(128, return_sequences=True, name="lstm1")(x)
+    x = layers.Dropout(0.2)(x)
     x = layers.LSTM(64, name="lstm2")(x)
-    x = layers.Dense(32, activation="relu", name="dense1")(x)
+
+    # Dense head
+    x = layers.Dense(64, activation="relu", name="dense1")(x)
     x = layers.Dropout(0.3, name="dropout")(x)
-    # Softmax output — probability distribution over 5 ETFs
+    x = layers.Dense(32, activation="relu", name="dense2")(x)
+
+    # Softmax classification head
     out = layers.Dense(N_CLASSES, activation="softmax", name="output")(x)
 
     model = keras.Model(inputs=inp, outputs=out, name=MODEL_NAME)
     model.compile(
-        optimizer = keras.optimizers.Adam(learning_rate=1e-3),
+        optimizer = keras.optimizers.Adam(learning_rate=5e-4),
         loss      = "sparse_categorical_crossentropy",
         metrics   = ["accuracy"],
     )
@@ -42,12 +52,15 @@ def get_callbacks(lookback: int) -> list:
                              f"lb{lookback}", "best.keras")
     os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
     return [
-        keras.callbacks.EarlyStopping(monitor="val_loss", patience=config.PATIENCE,
-                                       restore_best_weights=True),
-        keras.callbacks.ModelCheckpoint(ckpt_path, monitor="val_loss",
-                                         save_best_only=True),
-        keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5,
-                                           patience=5, min_lr=1e-6),
+        keras.callbacks.EarlyStopping(
+            monitor="val_accuracy", patience=config.PATIENCE,
+            restore_best_weights=True, mode="max"),
+        keras.callbacks.ModelCheckpoint(
+            ckpt_path, monitor="val_accuracy",
+            save_best_only=True, mode="max"),
+        keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss", factor=0.5,
+            patience=5, min_lr=1e-6),
     ]
 
 
@@ -66,17 +79,35 @@ def load_model(lookback):
 def train(prep: dict, epochs: int = config.MAX_EPOCHS):
     lookback   = prep["lookback"]
     n_features = prep["n_features"]
+    y_tr = prep["y_tr"]
+    y_va = prep["y_va"]
+
+    # Validate targets are integer class labels 0-4
+    assert y_tr.ndim == 1 or y_tr.shape[1] == 1, \
+        f"Expected 1D class labels, got shape {y_tr.shape}"
+    y_tr = y_tr.flatten().astype(np.int32)
+    y_va = y_va.flatten().astype(np.int32)
+
     print(f"\n[{MODEL_NAME}] lookback={lookback}  features={n_features}  "
           f"classes={N_CLASSES}")
+    print(f"  Class distribution (train): "
+          f"{dict(zip(*np.unique(y_tr, return_counts=True)))}")
+
+    # Class weights to handle imbalance
+    from sklearn.utils.class_weight import compute_class_weight
+    cw = compute_class_weight("balanced", classes=np.arange(N_CLASSES), y=y_tr)
+    class_weights = {i: w for i, w in enumerate(cw)}
+    print(f"  Class weights: {class_weights}")
 
     model = build_model(lookback, n_features)
     history = model.fit(
-        prep["X_tr"], prep["y_tr"],
-        validation_data = (prep["X_va"], prep["y_va"]),
-        epochs     = epochs,
-        batch_size = config.BATCH_SIZE,
-        callbacks  = get_callbacks(lookback),
-        verbose    = 1,
+        prep["X_tr"], y_tr,
+        validation_data = (prep["X_va"], y_va),
+        epochs          = epochs,
+        batch_size      = config.BATCH_SIZE,
+        callbacks       = get_callbacks(lookback),
+        class_weight    = class_weights,
+        verbose         = 1,
     )
     save_model(model, lookback)
     return model, history
