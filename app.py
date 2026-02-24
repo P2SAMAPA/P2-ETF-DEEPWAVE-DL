@@ -115,7 +115,7 @@ def trigger_github_training(start_year: int, wavelet: str,
     Trigger Train Models workflow via GitHub API workflow_dispatch.
     Requires GITHUB_TOKEN secret in HF Space.
     """
-    token = os.getenv("GITHUB_TOKEN", config.GITHUB_TOKEN)
+    token = os.getenv("P2SAMAPA_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", config.GITHUB_TOKEN))
     if not token:
         return False
 
@@ -445,43 +445,50 @@ with st.sidebar:
         st.cache_data.clear()
         st.success(f"✅ Risk recalculated — TSL={tsl_pct}%  Z={z_reentry:.1f}σ")
         st.rerun()
-    st.caption(
-        "↑ Instant. Re-applies TSL / Z-score to audit trail, "
-        "cumulative chart and hero card. No retraining needed."
-    )
+    st.caption("↑ Instant. No retraining needed.")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── BUTTON 2: Retrain Models (triggers GitHub Actions) ────────────────────
+    # ── BUTTON 2: Retrain Models ──────────────────────────────────────────────
+    has_gh_token = bool(os.getenv("P2SAMAPA_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", "")))
+
     st.markdown(
         "<div style='font-size:11px;color:#888;margin-bottom:4px;'>"
-        "Change wavelet / start year / epochs then retrain:</div>",
+        "Changing Start Year / Wavelet / Epochs requires retraining:</div>",
         unsafe_allow_html=True
     )
     run_btn = st.button("🚀 Retrain All 3 Models",
                          use_container_width=True, type="primary")
     if run_btn:
-        with st.spinner("Triggering GitHub Actions training pipeline..."):
-            ok = trigger_github_training(
-                start_year = start_year,
-                wavelet    = wavelet_key,
-                tsl_pct    = tsl_pct,
-                z_reentry  = z_reentry,
-                epochs     = max_epochs,
-                fee_bps    = fee_bps,
-            )
-        if ok:
-            st.success("✅ Retraining triggered! Check GitHub Actions. "
-                       "Results update here in ~1-2 hours.")
+        if has_gh_token:
+            with st.spinner("Triggering GitHub Actions training pipeline..."):
+                ok = trigger_github_training(
+                    start_year = start_year,
+                    wavelet    = wavelet_key,
+                    tsl_pct    = tsl_pct,
+                    z_reentry  = z_reentry,
+                    epochs     = max_epochs,
+                    fee_bps    = fee_bps,
+                )
+            if ok:
+                st.success("✅ Retraining triggered! Check GitHub Actions. "
+                           f"Training from {start_year} with {wavelet_key} wavelet. "
+                           "Results update here in ~1-2 hrs.")
+            else:
+                st.error("❌ GitHub Actions trigger failed. "
+                         "Check P2SAMAPA_GITHUB_TOKEN secret in HF Space settings.")
         else:
-            st.warning(
-                "⚠️ Could not auto-trigger GitHub Actions. "
-                "Go to GitHub → Actions → Train Models → Run workflow. "
-                "To enable auto-trigger: add GITHUB_TOKEN to HF Space secrets."
+            st.info(
+                f"**To retrain manually with these settings:**\n\n"
+                f"Go to **GitHub → Actions → Train Models → Run workflow** and set:\n"
+                f"- start_year = **{start_year}**\n"
+                f"- wavelet = **{wavelet_key}**\n"
+                f"- epochs = **{max_epochs}**\n\n"
+                f"Or add `P2SAMAPA_GITHUB_TOKEN` to HF Space secrets to enable one-click retrain."
             )
     st.caption(
-        "↑ Triggers full retrain with current Start Year / Wavelet / Epochs. "
-        "Takes ~1-2 hrs. Also runs automatically daily at 02:00 UTC."
+        f"↑ Retrains on data from {start_year} onwards using {wavelet_key} wavelet. "
+        "~1-2 hrs. Auto-runs daily at 02:00 UTC."
     )
 
     st.divider()
