@@ -80,8 +80,16 @@ def load_model(lookback):
 def train(prep: dict, epochs: int = config.MAX_EPOCHS):
     lookback   = prep["lookback"]
     n_features = prep["n_features"]
-    y_tr = prep["y_tr"].flatten().astype(np.int32)
-    y_va = prep["y_va"].flatten().astype(np.int32)
+    # Convert targets: handle both 1D class labels and 2D raw returns
+    _y_tr_raw = prep["y_tr"]
+    _y_va_raw = prep["y_va"]
+    if _y_tr_raw.ndim == 2 and _y_tr_raw.shape[1] > 1:
+        print(f"  WARNING: y shape {_y_tr_raw.shape} — converting via argmax")
+        y_tr = _y_tr_raw.argmax(axis=1).astype(np.int32)
+        y_va = _y_va_raw.argmax(axis=1).astype(np.int32)
+    else:
+        y_tr = _y_tr_raw.flatten().astype(np.int32)
+        y_va = _y_va_raw.flatten().astype(np.int32)
 
     print(f"\n[{MODEL_NAME}] lookback={lookback}  features={n_features}")
     print(f"  Class dist (train): {dict(zip(*np.unique(y_tr, return_counts=True)))}")
