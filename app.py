@@ -186,6 +186,7 @@ def apply_tsl_to_audit(audit: list, tsl_pct: float,
         return df
 
     in_cash   = False
+    tsl_days  = 0
     prev_ret  = 0.0
     prev2_ret = 0.0
     modes, signals, net_rets = [], [], []
@@ -194,12 +195,17 @@ def apply_tsl_to_audit(audit: list, tsl_pct: float,
         z       = float(row.get("Z_Score", 1.5))
         two_day = (prev_ret + prev2_ret) * 100
 
+        # TSL trigger
         if not in_cash and two_day <= -tsl_pct:
-            in_cash = True
-        if in_cash and z >= z_reentry:
+            in_cash  = True
+            tsl_days = 0
+
+        # Z-score re-entry (only after at least 1 CASH day)
+        if in_cash and tsl_days >= 1 and z >= z_reentry:
             in_cash = False
 
         if in_cash:
+            tsl_days += 1
             modes.append("💵 CASH")
             signals.append("CASH")
             net_rets.append(round(tbill / 100 / 252, 6))
@@ -330,7 +336,7 @@ with st.sidebar:
 
     z_reentry = st.slider(
         "📶 Z-score Re-entry Threshold",
-        min_value=0.80, max_value=2.0,
+        min_value=1.0, max_value=2.0,
         value=st.session_state.z_reentry,
         step=0.1, format="%.1f σ",
         key="z_slider",
