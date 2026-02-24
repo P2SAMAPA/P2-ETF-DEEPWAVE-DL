@@ -82,11 +82,15 @@ def train(prep: dict, epochs: int = config.MAX_EPOCHS):
     y_tr = prep["y_tr"]
     y_va = prep["y_va"]
 
-    # Validate targets are integer class labels 0-4
-    assert y_tr.ndim == 1 or y_tr.shape[1] == 1, \
-        f"Expected 1D class labels, got shape {y_tr.shape}"
-    y_tr = y_tr.flatten().astype(np.int32)
-    y_va = y_va.flatten().astype(np.int32)
+    # Convert targets to 1D integer class labels
+    # If 2D (N,5) raw returns passed, take argmax to get class index
+    if y_tr.ndim == 2 and y_tr.shape[1] > 1:
+        print(f"  [{MODEL_NAME}] WARNING: y_tr shape {y_tr.shape} — converting via argmax")
+        y_tr = y_tr.argmax(axis=1).astype(np.int32)
+        y_va = y_va.argmax(axis=1).astype(np.int32)
+    else:
+        y_tr = y_tr.flatten().astype(np.int32)
+        y_va = y_va.flatten().astype(np.int32)
 
     print(f"\n[{MODEL_NAME}] lookback={lookback}  features={n_features}  "
           f"classes={N_CLASSES}")
