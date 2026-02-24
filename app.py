@@ -73,18 +73,35 @@ US_HOLIDAYS_2025_2026 = {
     date(2026,11,26), date(2026,12,25),
 }
 
+MARKET_CLOSE_HOUR_EST = 16   # 4:00 PM EST = market closed
+
+def is_trading_day(d: date) -> bool:
+    return d.weekday() < 5 and d not in US_HOLIDAYS_2025_2026
+
+def current_signal_date() -> date:
+    # Convert UTC to EST (UTC-5)
+    now_est = datetime.utcnow() - timedelta(hours=5)
+    today   = now_est.date()
+    hour    = now_est.hour
+    # If today is a trading day and market not yet closed -> signal is FOR today
+    if is_trading_day(today) and hour < MARKET_CLOSE_HOUR_EST:
+        return today
+    # Otherwise signal is for next trading day
+    d = today + timedelta(days=1)
+    while not is_trading_day(d):
+        d += timedelta(days=1)
+    return d
+
 def next_trading_day(from_date: date = None) -> date:
-    """Return next US market trading day after from_date."""
     d = from_date or date.today()
     d += timedelta(days=1)
-    while d.weekday() >= 5 or d in US_HOLIDAYS_2025_2026:
+    while not is_trading_day(d):
         d += timedelta(days=1)
     return d
 
 def last_trading_day(from_date: date = None) -> date:
-    """Return most recent US market trading day."""
     d = from_date or date.today()
-    while d.weekday() >= 5 or d in US_HOLIDAYS_2025_2026:
+    while not is_trading_day(d):
         d -= timedelta(days=1)
     return d
 
@@ -443,8 +460,8 @@ st.caption("Winner selected by highest raw annualised return on out-of-sample te
 pred  = load_prediction()
 evalu = load_evaluation()
 
-# Correct next trading day
-next_td   = next_trading_day()
+# Correct signal date — today if pre-close, next trading day if post-close
+next_td   = current_signal_date()
 last_td   = last_trading_day()
 as_of     = pred.get("as_of_date", str(next_td))   # use next trading day
 winner    = evalu.get("winner", "model_a")
@@ -535,9 +552,12 @@ if in_cash_now:
 else:
     wp           = preds.get(winner, {})
     final_signal = wp.get("signal", "—")
+    now_est   = datetime.utcnow() - timedelta(hours=5)
+    is_today  = (next_td == now_est.date())
+    td_label  = "TODAY'S SIGNAL" if is_today else "NEXT TRADING DAY SIGNAL"
     st.markdown(f"""
     <div class="hero-card">
-      <div class="hero-label">{winner_label} · Next Trading Day Signal</div>
+      <div class="hero-label">{winner_label} · {td_label}</div>
       <div class="hero-value">🎯 {next_td} → {final_signal}</div>
     </div>""", unsafe_allow_html=True)
 
