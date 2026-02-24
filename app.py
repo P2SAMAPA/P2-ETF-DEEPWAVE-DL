@@ -846,7 +846,7 @@ if audit_raw:
     disp = df_audit[["Date","Signal_TSL","Confidence","Z_Score",
                       "Net_TSL","Mode"]].copy()
     disp.columns = ["Date","Signal","Confidence","Z Score","Net Return","Mode"]
-    disp["Date"]       = pd.to_datetime(disp["Date"]).dt.strftime("%Y-%m-%d")
+    disp["Date"]       = pd.to_datetime(disp["Date"], format="mixed").dt.strftime("%Y-%m-%d")
     disp["Confidence"] = disp["Confidence"].apply(
         lambda x: f"{float(x):.1%}" if isinstance(x,(int,float)) else x)
     disp["Z Score"]    = disp["Z Score"].apply(
