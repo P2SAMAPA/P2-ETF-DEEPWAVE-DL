@@ -1,5 +1,6 @@
-# model_c.py — Option C: Wavelet-Parallel-Dual-Stream (CLASSIFICATION)
-# Two parallel streams: ETF wavelet features + Macro wavelet features → fused → softmax
+# model_c.py — Option C: Wavelet-Parallel-Dual-Stream-CNN-LSTM
+# Two streams: ETF wavelet features + Macro features → merged classification
+
 import os
 import numpy as np
 import tensorflow as tf
@@ -11,44 +12,58 @@ MODEL_NAME = "model_c"
 N_CLASSES  = len(config.ETFS)
 
 
-def build_model(lookback, n_features, n_etf_features):
-    n_macro = n_features - n_etf_features
+def build_model(lookback: int, n_etf_features: int,
+                n_macro_features: int) -> keras.Model:
 
-    # ETF stream
-    inp_etf = keras.Input(shape=(lookback, n_etf_features), name="input_etf")
-    x_etf   = layers.Conv1D(64, 3, padding="causal", activation="relu")(inp_etf)
-    x_etf   = layers.LSTM(64, return_sequences=True)(x_etf)
-    x_etf   = layers.LSTM(32)(x_etf)
+    # ── ETF stream ────────────────────────────────────────────────────────────
+    etf_inp = keras.Input(shape=(lookback, n_etf_features), name="etf_input")
+    e = layers.Conv1D(64, 3, padding="causal", activation="relu")(etf_inp)
+    e = layers.BatchNormalization()(e)
+    e = layers.Conv1D(32, 3, padding="causal", activation="relu")(e)
+    e = layers.BatchNormalization()(e)
+    e = layers.Dropout(0.2)(e)
+    e = layers.LSTM(64, return_sequences=True)(e)
+    e = layers.Dropout(0.2)(e)
+    e = layers.LSTM(32)(e)
 
-    # Macro stream
-    inp_mac = keras.Input(shape=(lookback, max(n_macro, 1)), name="input_macro")
-    x_mac   = layers.Conv1D(32, 3, padding="causal", activation="relu")(inp_mac)
-    x_mac   = layers.LSTM(32)(x_mac)
+    # ── Macro stream ─────────────────────────────────────────────────────────
+    mac_inp = keras.Input(shape=(lookback, n_macro_features), name="macro_input")
+    m = layers.Conv1D(32, 3, padding="causal", activation="relu")(mac_inp)
+    m = layers.BatchNormalization()(m)
+    m = layers.Dropout(0.2)(m)
+    m = layers.LSTM(32, return_sequences=True)(m)
+    m = layers.Dropout(0.2)(m)
+    m = layers.LSTM(16)(m)
 
-    # Fusion
-    x   = layers.Concatenate()([x_etf, x_mac])
-    x   = layers.Dense(64, activation="relu")(x)
-    x   = layers.Dropout(0.3)(x)
-    out = layers.Dense(N_CLASSES, activation="softmax", name="output")(x)
+    # ── Fusion ───────────────────────────────────────────────────────────────
+    fused = layers.Concatenate()([e, m])
+    x     = layers.Dense(64, activation="relu")(fused)
+    x     = layers.Dropout(0.3)(x)
+    x     = layers.Dense(32, activation="relu")(x)
+    out   = layers.Dense(N_CLASSES, activation="softmax", name="output")(x)
 
-    model = keras.Model(inputs=[inp_etf, inp_mac], outputs=out, name=MODEL_NAME)
+    model = keras.Model(inputs=[etf_inp, mac_inp], outputs=out, name=MODEL_NAME)
     model.compile(
-        optimizer = keras.optimizers.Adam(learning_rate=5e-4),
+        optimizer = keras.optimizers.Adam(learning_rate=3e-4),
         loss      = "sparse_categorical_crossentropy",
         metrics   = ["accuracy"],
     )
     return model
 
 
-def get_callbacks(lookback):
-    ckpt = os.path.join(config.MODELS_DIR, MODEL_NAME, f"lb{lookback}", "best.keras")
-    os.makedirs(os.path.dirname(ckpt), exist_ok=True)
+def get_callbacks(lookback: int) -> list:
+    ckpt_path = os.path.join(config.MODELS_DIR, MODEL_NAME,
+                             f"lb{lookback}", "best.keras")
+    os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
     return [
-        keras.callbacks.EarlyStopping(monitor="val_loss", patience=config.PATIENCE,
-                                       restore_best_weights=True),
-        keras.callbacks.ModelCheckpoint(ckpt, monitor="val_loss", save_best_only=True),
-        keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.5,
-                                           patience=5, min_lr=1e-6),
+        keras.callbacks.EarlyStopping(
+            monitor="val_accuracy", patience=config.PATIENCE,
+            restore_best_weights=True, mode="max"),
+        keras.callbacks.ModelCheckpoint(
+            ckpt_path, monitor="val_accuracy",
+            save_best_only=True, mode="max"),
+        keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss", factor=0.5, patience=5, min_lr=1e-6),
     ]
 
 
@@ -60,33 +75,39 @@ def save_model(model, lookback):
 
 
 def load_model(lookback):
-    return keras.models.load_model(
-        os.path.join(config.MODELS_DIR, MODEL_NAME, f"lb{lookback}", "best.keras"))
+    path = os.path.join(config.MODELS_DIR, MODEL_NAME, f"lb{lookback}", "best.keras")
+    return keras.models.load_model(path)
 
 
-def train(prep, epochs=config.MAX_EPOCHS):
-    lookback     = prep["lookback"]
-    n_features   = prep["n_features"]
-    n_etf        = prep["n_etf_features"]
-    print(f"\n[{MODEL_NAME}] lookback={lookback}  ETF={n_etf}  "
-          f"macro={n_features-n_etf}  classes={N_CLASSES}")
+def train(prep: dict, epochs: int = config.MAX_EPOCHS):
+    lookback       = prep["lookback"]
+    n_etf          = prep["n_etf_features"]
+    n_macro        = prep["n_features"] - n_etf
+    y_tr = prep["y_tr"].flatten().astype(np.int32)
+    y_va = prep["y_va"].flatten().astype(np.int32)
 
-    model = build_model(lookback, n_features, n_etf)
+    print(f"\n[{MODEL_NAME}] lookback={lookback}  "
+          f"etf_feats={n_etf}  macro_feats={n_macro}")
+    print(f"  Class dist (train): {dict(zip(*np.unique(y_tr, return_counts=True)))}")
 
-    X_tr_etf = prep["X_tr"][:, :, :n_etf]
-    X_tr_mac = prep["X_tr"][:, :, n_etf:]
-    X_va_etf = prep["X_va"][:, :, :n_etf]
-    X_va_mac = prep["X_va"][:, :, n_etf:]
+    from sklearn.utils.class_weight import compute_class_weight
+    cw = compute_class_weight("balanced", classes=np.arange(N_CLASSES), y=y_tr)
+    class_weights = {i: w for i, w in enumerate(cw)}
 
-    if X_tr_mac.shape[2] == 0:
-        X_tr_mac = np.zeros((X_tr_etf.shape[0], lookback, 1), dtype=np.float32)
-        X_va_mac = np.zeros((X_va_etf.shape[0], lookback, 1), dtype=np.float32)
+    model = build_model(lookback, n_etf, max(n_macro, 1))
+    X_tr_etf  = prep["X_tr"][:, :, :n_etf]
+    X_tr_mac  = prep["X_tr"][:, :, n_etf:]
+    X_va_etf  = prep["X_va"][:, :, :n_etf]
+    X_va_mac  = prep["X_va"][:, :, n_etf:]
 
     history = model.fit(
-        [X_tr_etf, X_tr_mac], prep["y_tr"],
-        validation_data = ([X_va_etf, X_va_mac], prep["y_va"]),
-        epochs=epochs, batch_size=config.BATCH_SIZE,
-        callbacks=get_callbacks(lookback), verbose=1,
+        [X_tr_etf, X_tr_mac], y_tr,
+        validation_data = ([X_va_etf, X_va_mac], y_va),
+        epochs          = epochs,
+        batch_size      = config.BATCH_SIZE,
+        callbacks       = get_callbacks(lookback),
+        class_weight    = class_weights,
+        verbose         = 1,
     )
     save_model(model, lookback)
     return model, history
