@@ -1,13 +1,13 @@
 {
-  "as_of_date": "2026-02-24",
+  "as_of_date": "2026-02-25",
   "winner_model": "model_c",
-  "final_signal": "VNQ",
-  "final_confidence": 0.3028,
+  "final_signal": "SLV",
+  "final_confidence": 0.5621,
   "tsl_status": {
     "two_day_cumul_pct": 12.63,
     "tsl_triggered": false,
     "in_cash": false,
-    "current_z": 1.035,
+    "current_z": 1.806,
     "z_reentry": 1.0,
     "tsl_pct": 10.0
   },
@@ -15,44 +15,44 @@
   "predictions": {
     "model_a": {
       "model": "model_a",
-      "lookback": 60,
-      "signal": "SLV",
-      "confidence": 0.2534,
-      "z_score": 1.274,
+      "lookback": 30,
+      "signal": "GLD",
+      "confidence": 0.2464,
+      "z_score": 1.211,
       "probabilities": {
-        "TLT": 0.2438,
-        "TBT": 0.1464,
-        "VNQ": 0.1688,
-        "GLD": 0.1876,
-        "SLV": 0.2534
+        "TLT": 0.1813,
+        "TBT": 0.1441,
+        "VNQ": 0.2398,
+        "GLD": 0.2464,
+        "SLV": 0.1884
       }
     },
     "model_b": {
       "model": "model_b",
-      "lookback": 60,
-      "signal": "SLV",
-      "confidence": 0.3409,
-      "z_score": 1.293,
+      "lookback": 30,
+      "signal": "VNQ",
+      "confidence": 0.2831,
+      "z_score": 1.284,
       "probabilities": {
-        "TLT": 0.292,
-        "TBT": 0.1188,
-        "VNQ": 0.2047,
-        "GLD": 0.0435,
-        "SLV": 0.3409
+        "TLT": 0.1992,
+        "TBT": 0.1222,
+        "VNQ": 0.2831,
+        "GLD": 0.1346,
+        "SLV": 0.2608
       }
     },
     "model_c": {
       "model": "model_c",
-      "lookback": 30,
-      "signal": "VNQ",
-      "confidence": 0.3028,
-      "z_score": 1.035,
+      "lookback": 60,
+      "signal": "SLV",
+      "confidence": 0.5621,
+      "z_score": 1.806,
       "probabilities": {
-        "TLT": 0.2473,
-        "TBT": 0.2007,
-        "VNQ": 0.3028,
-        "GLD": 0.0124,
-        "SLV": 0.2368
+        "TLT": 0.0929,
+        "TBT": 0.0682,
+        "VNQ": 0.2677,
+        "GLD": 0.009,
+        "SLV": 0.5621
       }
     }
   }
