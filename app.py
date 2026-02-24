@@ -354,11 +354,61 @@ def ensure_weights_and_data():
     return downloaded
 
 
+# ─── Persistent user preferences (survives page reload / Space restart) ───────
+
+PREFS_FILE = "user_prefs.json"
+
+def load_prefs() -> dict:
+    """Load saved slider preferences from HF Dataset."""
+    defaults = {
+        "start_year": 2008, "fee_bps": 10,
+        "max_epochs": 80,   "wavelet": "db4 (Daubechies-4)",
+        "tsl_pct": 10,      "z_reentry": 1.1,
+    }
+    try:
+        from huggingface_hub import hf_hub_download
+        path = hf_hub_download(
+            repo_id=config.HF_DATASET_REPO,
+            filename=PREFS_FILE,
+            repo_type="dataset",
+            token=config.HF_TOKEN or None,
+        )
+        saved = json.load(open(path))
+        defaults.update(saved)
+    except Exception:
+        pass
+    return defaults
+
+
+def save_prefs(prefs: dict):
+    """Save slider preferences to HF Dataset so they survive restarts."""
+    try:
+        from huggingface_hub import HfApi
+        import tempfile
+        api = HfApi(token=config.HF_TOKEN or None)
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(prefs, f, indent=2)
+            tmp = f.name
+        api.upload_file(
+            path_or_fileobj=tmp,
+            path_in_repo=PREFS_FILE,
+            repo_id=config.HF_DATASET_REPO,
+            repo_type="dataset",
+        )
+    except Exception:
+        pass   # non-critical — silently skip if HF write fails
+
+
 # ─── Session state for instant risk recalc ───────────────────────────────────
-if "tsl_pct" not in st.session_state:
-    st.session_state.tsl_pct   = 10
-if "z_reentry" not in st.session_state:
-    st.session_state.z_reentry = 1.1
+if "prefs_loaded" not in st.session_state:
+    _prefs = load_prefs()
+    st.session_state.tsl_pct      = _prefs["tsl_pct"]
+    st.session_state.z_reentry    = _prefs["z_reentry"]
+    st.session_state.start_year   = _prefs["start_year"]
+    st.session_state.fee_bps      = _prefs["fee_bps"]
+    st.session_state.max_epochs   = _prefs["max_epochs"]
+    st.session_state.wavelet      = _prefs["wavelet"]
+    st.session_state.prefs_loaded = True
 if "last_eval" not in st.session_state:
     st.session_state.last_eval = {}
 
@@ -369,30 +419,39 @@ with st.sidebar:
     st.caption(f"🕐 EST: {datetime.now().strftime('%H:%M:%S')}")
     st.divider()
 
-    # Start Year 2008-2024
+    # Start Year
     start_year = st.slider("📅 Start Year",
                             min_value=config.START_YEAR_MIN,
                             max_value=config.START_YEAR_MAX,
-                            value=2008)
+                            value=st.session_state.start_year)
+    st.session_state.start_year = start_year
     st.caption("↑ Changing this requires 🚀 Retrain. "
                "TSL/Z-score sliders are instant (no retrain needed).")
 
     # Fee
-    fee_bps = st.slider("💰 Fee (bps)", 0, 50, 10)
+    fee_bps = st.slider("💰 Fee (bps)", 0, 50,
+                         value=st.session_state.fee_bps)
+    st.session_state.fee_bps = fee_bps
 
     # Max Epochs
     max_epochs = st.number_input("🔁 Max Epochs",
                                   min_value=10, max_value=300,
-                                  value=80, step=5)
+                                  value=st.session_state.max_epochs,
+                                  step=5)
+    st.session_state.max_epochs = int(max_epochs)
 
-    # Wavelet type — feeds into training trigger
+    # Wavelet type
+    _wavelet_options = ["db4 (Daubechies-4)", "db2 (Daubechies-2)", "haar", "sym5"]
+    _wavelet_idx = _wavelet_options.index(st.session_state.wavelet) \
+                   if st.session_state.wavelet in _wavelet_options else 0
     wavelet_choice = st.selectbox(
         "〰️ Wavelet Type",
-        options=["db4 (Daubechies-4)", "db2 (Daubechies-2)", "haar", "sym5"],
-        index=0,
+        options=_wavelet_options,
+        index=_wavelet_idx,
         help="Selected wavelet is passed to GitHub Actions training job"
     )
-    wavelet_key = wavelet_choice.split(" ")[0]   # extract "db4", "db2" etc.
+    st.session_state.wavelet = wavelet_choice
+    wavelet_key = wavelet_choice.split(" ")[0]
 
     # REMOVED: Lookback Window (auto-selected by model)
     # REMOVED: Train/Val/Test Split (hardcoded 80/10/10)
@@ -460,6 +519,12 @@ with st.sidebar:
     run_btn = st.button("🚀 Retrain All 3 Models",
                          use_container_width=True, type="primary")
     if run_btn:
+        # Save preferences immediately so they persist after Space restarts
+        save_prefs({
+            "start_year": start_year, "fee_bps": fee_bps,
+            "max_epochs": int(max_epochs), "wavelet": wavelet_choice,
+            "tsl_pct": tsl_pct, "z_reentry": z_reentry,
+        })
         if has_gh_token:
             with st.spinner("Triggering GitHub Actions training pipeline..."):
                 ok = trigger_github_training(
