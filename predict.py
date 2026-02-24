@@ -97,9 +97,14 @@ def download_data_from_hf():
 
 # ─── Softmax + Z-score ───────────────────────────────────────────────────────
 
-def softmax_probs(preds: np.ndarray, temperature: float = 0.1) -> np.ndarray:
-    """Temperature-scaled softmax. Low temperature sharpens small differences."""
-    scaled = preds / (temperature + 1e-8)
+def softmax_probs(preds: np.ndarray) -> np.ndarray:
+    """Auto-detects if model output is already softmax (classification) or raw (regression)."""
+    preds = np.array(preds)
+    row_sums = preds.sum(axis=1)
+    if np.allclose(row_sums, 1.0, atol=0.01):
+        return np.clip(preds, 0, 1)   # already softmax probabilities
+    # Legacy regression: apply temperature-scaled softmax
+    scaled = preds / 0.1
     e = np.exp(scaled - scaled.max(axis=1, keepdims=True))
     return e / e.sum(axis=1, keepdims=True)
 
