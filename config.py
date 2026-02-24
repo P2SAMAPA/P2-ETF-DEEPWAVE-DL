@@ -11,7 +11,7 @@ GITHUB_REPO     = "P2SAMAPA/P2-ETF-DEEPWAVE-DL"
 # ── API Keys ───────────────────────────────────────────────────────────────────
 HF_TOKEN        = os.getenv("HF_TOKEN", "")
 FRED_API_KEY    = os.getenv("FRED_API_KEY", "")
-GITHUB_TOKEN    = os.getenv("GITHUB_TOKEN", "")
+GITHUB_TOKEN    = os.getenv("P2SAMAPA_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
 
 # ── Universe ───────────────────────────────────────────────────────────────────
 ETFS            = ["TLT", "TBT", "VNQ", "GLD", "SLV"]
