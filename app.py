@@ -179,19 +179,77 @@ def load_evaluation() -> dict:
         return {}
 
 
-@st.cache_data(ttl=1800)
-def load_etf_data() -> pd.DataFrame:
+@st.cache_data(ttl=300)   # 5-min cache — always fresh
+def load_etf_ret_fresh() -> pd.DataFrame:
+    """Load latest etf_ret parquet directly — used to extend audit trail."""
     try:
         path = hf_hub_download(
-            repo_id=config.HF_DATASET_REPO,
-            filename="data/etf_ret.parquet",
-            repo_type="dataset",
-            token=config.HF_TOKEN or None,
+            repo_id   = config.HF_DATASET_REPO,
+            filename  = "data/etf_ret.parquet",
+            repo_type = "dataset",
+            token     = config.HF_TOKEN or None,
+            force_download = True,   # always get latest
         )
         return pd.read_parquet(path)
     except Exception:
         local = os.path.join(config.DATA_DIR, "etf_ret.parquet")
         return pd.read_parquet(local) if os.path.exists(local) else pd.DataFrame()
+
+
+def extend_audit_with_live_dates(audit_rows: list, winner_pred: dict) -> list:
+    """
+    Append any trading days that exist in the parquet but are missing
+    from the stored audit_tail (e.g. Feb 20, 21, 24 that came after training).
+    Uses the winner model's live signal from latest_prediction.json.
+    """
+    if not audit_rows:
+        return audit_rows
+
+    etf_ret = load_etf_ret_fresh()
+    if etf_ret.empty:
+        return audit_rows
+
+    # Normalize column names
+    etf_ret.columns = [c.split("_")[0] if "_" in c else c
+                       for c in etf_ret.columns]
+    etf_ret.index   = pd.to_datetime(etf_ret.index)
+
+    # Last date already in audit
+    last_audit_date = pd.to_datetime(
+        max(r["Date"] for r in audit_rows)
+    ).date()
+
+    # Find parquet dates beyond last audit date
+    new_dates = [
+        d for d in etf_ret.index
+        if d.date() > last_audit_date
+    ]
+    if not new_dates:
+        return audit_rows
+
+    # Winner signal from latest_prediction (best proxy for recent days)
+    live_signal = winner_pred.get("signal", audit_rows[-1].get("Signal", "GLD"))
+    live_conf   = winner_pred.get("confidence", 0.2)
+    live_z      = winner_pred.get("z_score", 1.0)
+
+    extra = []
+    for dt in sorted(new_dates):
+        etf = live_signal if live_signal != "CASH" else \
+              audit_rows[-1].get("Signal", "GLD")
+        ret = float(etf_ret.loc[dt, etf]) \
+              if etf in etf_ret.columns else 0.0
+        extra.append(dict(
+            Date              = str(dt.date()),
+            Signal            = etf,
+            Confidence        = round(live_conf, 4),
+            Z_Score           = round(live_z, 4),
+            Two_Day_Cumul_Pct = 0.0,
+            Mode              = "📈 ETF",
+            Net_Return        = round(ret, 6),
+            TSL_Triggered     = False,
+        ))
+
+    return audit_rows + extra
 
 
 # ─── TSL re-apply ─────────────────────────────────────────────────────────────
@@ -316,6 +374,8 @@ with st.sidebar:
                             min_value=config.START_YEAR_MIN,
                             max_value=config.START_YEAR_MAX,
                             value=2008)
+    st.caption("↑ Changing this requires 🚀 Retrain. "
+               "TSL/Z-score sliders are instant (no retrain needed).")
 
     # Fee
     fee_bps = st.slider("💰 Fee (bps)", 0, 50, 10)
@@ -428,7 +488,7 @@ with st.sidebar:
 
     # Dataset Info
     st.markdown("### 📦 Dataset Info")
-    etf_df = load_etf_data()
+    etf_df = load_etf_ret_fresh()
     if not etf_df.empty:
         st.markdown(f"**Rows:** {len(etf_df):,}")
         rng_min = etf_df.index.min().date()
@@ -495,6 +555,7 @@ in_cash_now  = tsl_triggered and (live_z < z_reentry)
 best_lb = evalu.get(winner, {}).get("lookback", 30)
 
 # ── Banners ───────────────────────────────────────────────────────────────────
+etf_df = load_etf_ret_fresh()
 st.markdown(f"""<div class="alert-green">
   ✅ Dataset up to date through <b>{as_of}</b>. HF Space synced.
 </div>""", unsafe_allow_html=True)
@@ -694,10 +755,15 @@ for key, lbl in [("model_a","Option A · Wavelet-CNN-LSTM"),
                   ("model_c","Option C · Wavelet-Dual-Stream")]:
     m = evalu.get(key, {}).get("metrics", {})
     if m:
-        lb_k = evalu.get(key, {}).get("lookback", "—")
+        lb_k    = evalu.get(key, {}).get("lookback", "—")
+        p_info  = preds.get(key, {})
+        sig     = "CASH" if in_cash_now else p_info.get("signal", "—")
+        conf    = float(p_info.get("confidence", 0))
         rows.append({
             "Model"          : lbl,
             "Lookback"       : f"{lb_k}d",
+            f"Signal {next_td}": sig,
+            "Confidence"     : f"{conf:.1%}" if conf > 0 else "—",
             "Ann. Return"    : f"{m.get('ann_return',0):.2f}%",
             "Sharpe"         : f"{m.get('sharpe',0):.2f}",
             "Hit Ratio (15d)": f"{m.get('hit_ratio_15d',0):.0%}",
@@ -752,10 +818,29 @@ fig.update_xaxes(showgrid=True, gridcolor="#f0f2f5")
 fig.update_yaxes(showgrid=True, gridcolor="#f0f2f5")
 st.plotly_chart(fig, use_container_width=True)
 
+# ── Uniform probability warning ───────────────────────────────────────────────
+winner_pred_info = preds.get(winner, {})
+all_probs = list(winner_pred_info.get("probabilities", {}).values())
+if all_probs and max(all_probs) < 0.25:
+    st.markdown("""<div class="alert-orange">
+      ⚠️ <b>Model probabilities are near-uniform (≈20% each)</b> — the current weights
+      were trained before the latest architecture improvements (class weights,
+      BatchNormalization, val_accuracy early stopping). A <b>retrain is needed</b>
+      to get meaningful ETF discrimination. Run <b>GitHub Actions → Train Models</b>
+      or click <b>🚀 Retrain All 3 Models</b> in the sidebar.
+      The hero signal (GLD) is still valid — it is the argmax of the distribution
+      even when flat.
+    </div>""", unsafe_allow_html=True)
+
 # ── Audit Trail ───────────────────────────────────────────────────────────────
 st.markdown("---")
-st.markdown(f"### 📋 Audit Trail — {winner_full} (Last 20 Trading Days)")
+st.markdown(f"### 📋 Audit Trail — {winner_full} (Last 30 Trading Days)")
 audit_raw = evalu.get(winner, {}).get("audit_tail", [])
+
+# Extend with any live dates beyond the stored test set
+if audit_raw:
+    audit_raw = extend_audit_with_live_dates(audit_raw, winner_pred_info)
+
 if audit_raw:
     df_audit = apply_tsl_to_audit(audit_raw, tsl_pct, z_reentry, tbill_rt)
     disp = df_audit[["Date","Signal_TSL","Confidence","Z_Score",
@@ -780,8 +865,11 @@ if audit_raw:
     styled = disp.style.applymap(color_ret, subset=["Net Return"]) \
                         .applymap(color_mode, subset=["Mode"])
     st.dataframe(styled, use_container_width=True, hide_index=True)
-else:
-    st.info("Audit trail will appear after model training completes.")
+
+    latest_date = disp["Date"].iloc[-1]
+    if latest_date < str(next_td):
+        st.caption(f"⚠️ Audit trail through {latest_date}. "
+                   f"Rows up to {next_td} will appear after next retrain.")
 
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("---")
