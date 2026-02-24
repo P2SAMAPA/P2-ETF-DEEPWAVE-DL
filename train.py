@@ -28,13 +28,13 @@ os.makedirs(config.MODELS_DIR, exist_ok=True)
 # ─── Per-model trainer ────────────────────────────────────────────────────────
 
 def train_one_model(module, tag: str, prep: dict, epochs: int) -> dict:
-    """Train a single model on a single lookback. Returns val_mse."""
+    """Train a single model on a single lookback. Returns val metrics."""
     model, history = module.train(prep, epochs=epochs)
-    val_mse = min(history.history["val_loss"])
-    val_mae = min(history.history["val_mae"])
+    val_loss = min(history.history["val_loss"])
+    val_acc  = max(history.history.get("val_accuracy", [0]))
     print(f"  [{tag}] lb={prep['lookback']}  "
-          f"val_mse={val_mse:.6f}  val_mae={val_mae:.6f}")
-    return {"val_mse": val_mse, "val_mae": val_mae,
+          f"val_loss={val_loss:.6f}  val_acc={val_acc:.4f}")
+    return {"val_mse": val_loss, "val_acc": val_acc,
             "lookback": prep["lookback"], "model": tag}
 
 
