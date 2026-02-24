@@ -83,8 +83,16 @@ def train(prep: dict, epochs: int = config.MAX_EPOCHS):
     lookback       = prep["lookback"]
     n_etf          = prep["n_etf_features"]
     n_macro        = prep["n_features"] - n_etf
-    y_tr = prep["y_tr"].flatten().astype(np.int32)
-    y_va = prep["y_va"].flatten().astype(np.int32)
+    # Convert targets: handle both 1D class labels and 2D raw returns
+    _y_tr_raw = prep["y_tr"]
+    _y_va_raw = prep["y_va"]
+    if _y_tr_raw.ndim == 2 and _y_tr_raw.shape[1] > 1:
+        print(f"  WARNING: y shape {_y_tr_raw.shape} — converting via argmax")
+        y_tr = _y_tr_raw.argmax(axis=1).astype(np.int32)
+        y_va = _y_va_raw.argmax(axis=1).astype(np.int32)
+    else:
+        y_tr = _y_tr_raw.flatten().astype(np.int32)
+        y_va = _y_va_raw.flatten().astype(np.int32)
 
     print(f"\n[{MODEL_NAME}] lookback={lookback}  "
           f"etf_feats={n_etf}  macro_feats={n_macro}")
