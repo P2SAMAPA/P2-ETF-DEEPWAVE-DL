@@ -77,17 +77,20 @@ def raw_signals(model, prep, is_dual=False):
     return preds
 
 
-def softmax_probs(preds, temperature=0.1):
+def softmax_probs(preds, temperature=1.0):
     """
-    Temperature-scaled softmax.
-    Models predict small log-return values (~1e-4 scale).
-    temperature=0.1 amplifies differences so argmax ETF gets meaningfully
-    higher probability than uniform 0.2.
+    Softmax probabilities. Models now output softmax directly (classification).
+    temperature=1.0 = pass-through. Left as parameter for legacy compatibility.
     """
-    preds  = np.array(preds)
+    preds = np.array(preds)
+    # If model already outputs softmax (sums to 1), return as-is
+    row_sums = preds.sum(axis=1)
+    if np.allclose(row_sums, 1.0, atol=0.01):
+        return np.clip(preds, 0, 1)
+    # Otherwise apply softmax (legacy regression models)
     scaled = preds / (temperature + 1e-8)
-    e      = np.exp(scaled - scaled.max(axis=1, keepdims=True))
-    return e / e.sum(axis=1, keepdims=True)   # (N, 5)
+    e = np.exp(scaled - scaled.max(axis=1, keepdims=True))
+    return e / e.sum(axis=1, keepdims=True)
 
 
 def compute_z_scores(probs):
