@@ -242,8 +242,16 @@ def run_predict(tsl_pct=config.DEFAULT_TSL_PCT,
         download_weights_from_hf()
 
     lookbacks = get_best_lookbacks()
-    last_date = data["etf_ret"].index.max().date()
-    next_td   = next_trading_day(last_date)
+
+    # Signal date: today if market not yet closed (< 4pm EST), else next trading day
+    now_est  = datetime.utcnow() - timedelta(hours=5)
+    today    = now_est.date()
+    hour_est = now_est.hour
+    if today.weekday() < 5 and today not in US_HOLIDAYS and hour_est < 16:
+        next_td = today                    # pre-close: signal is FOR today
+    else:
+        next_td = next_trading_day(today)  # post-close: signal is for tomorrow
+
     tbill_val = 3.6
     try:
         from preprocess import normalize_etf_columns, flatten_columns
