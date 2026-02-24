@@ -109,70 +109,73 @@ def compute_z_scores(probs):
 def backtest(probs, dates, etf_returns, tbill_series,
              fee_bps=10, tsl_pct=10.0, z_reentry=1.1):
     """
-    Day-by-day backtest with proper TSL + Z-score re-entry logic.
-    tsl_pct: float e.g. 10.0 means trigger at -10% 2-day cumul
-    z_reentry: float e.g. 1.1 sigma
+    Day-by-day backtest with TSL + Z-score re-entry.
+    Key fix: TSL fires end-of-day, re-entry checked next day.
     """
-    z_scores   = compute_z_scores(probs)   # (N,) — one per day
+    z_scores   = compute_z_scores(probs)
     records    = []
     in_cash    = False
     prev_ret   = 0.0
     prev2_ret  = 0.0
     last_signal= None
+    tsl_days   = 0   # days spent in CASH after TSL
 
     for i in range(len(probs)):
         date   = pd.Timestamp(dates[i])
-        prob   = probs[i]                      # (5,)
-        z      = float(z_scores[i])            # scalar for this day
+        prob   = probs[i]
+        z      = float(z_scores[i])
         top_i  = int(np.argmax(prob))
         etf    = config.ETFS[top_i]
-        conf   = float(prob[top_i])            # already a probability 0-1
+        conf   = float(prob[top_i])
 
         # 2-day cumulative return (previous 2 days)
         two_day_cumul_pct = (prev_ret + prev2_ret) * 100
 
-        # ── TSL trigger ───────────────────────────────────────────────────────
+        # ── TSL trigger (must be out of CASH to trigger) ───────────────────
         if not in_cash and two_day_cumul_pct <= -tsl_pct:
-            in_cash = True
+            in_cash  = True
+            tsl_days = 0
 
-        # ── Z-score re-entry ──────────────────────────────────────────────────
-        if in_cash and z >= z_reentry:
+        # ── Z-score re-entry (only after at least 1 full CASH day) ────────
+        if in_cash and tsl_days >= 1 and z >= z_reentry:
             in_cash = False
 
-        # ── Get actual return ─────────────────────────────────────────────────
+        if in_cash:
+            tsl_days += 1
+
+        # ── Get actual return ─────────────────────────────────────────────
         if date in etf_returns.index:
             if in_cash:
                 tbill_rate = float(tbill_series.get(date, 3.6))
                 gross_ret  = (tbill_rate / 100) / 252
-                fee        = 0.0
-                mode       = "CASH"
+                mode       = "💵 CASH"
                 signal     = "CASH"
             else:
                 gross_ret  = float(etf_returns.loc[date, etf]) \
                              if etf in etf_returns.columns else 0.0
-                fee        = (fee_bps / 10000) if etf != last_signal else 0.0
-                gross_ret -= fee
-                mode       = "ETF"
+                fee_cost   = (fee_bps / 10000) if etf != last_signal else 0.0
+                gross_ret -= fee_cost
+                mode       = "📈 ETF"
                 signal     = etf
                 last_signal= etf
         else:
             gross_ret = 0.0
-            fee       = 0.0
-            mode      = "CASH" if in_cash else "ETF"
-            signal    = "CASH" if in_cash else etf
+            mode      = "💵 CASH" if in_cash else "📈 ETF"
+            signal    = "CASH"    if in_cash else etf
 
         records.append(dict(
-            Date            = str(date.date()),
-            Signal          = signal,
-            Confidence      = round(conf, 4),        # 0-1 float
-            Z_Score         = round(z, 4),           # per-day z
+            Date              = str(date.date()),
+            Signal            = signal,
+            Confidence        = round(conf, 4),
+            Z_Score           = round(z, 4),
             Two_Day_Cumul_Pct = round(two_day_cumul_pct, 2),
-            Mode            = mode,
-            Net_Return      = round(gross_ret, 6),
-            TSL_Triggered   = in_cash,
+            Mode              = mode,
+            Net_Return        = round(gross_ret, 6),
+            TSL_Triggered     = in_cash,
         ))
 
         prev2_ret = prev_ret
+        prev_ret  = gross_ret
         prev_ret  = gross_ret
 
     df = pd.DataFrame(records)
