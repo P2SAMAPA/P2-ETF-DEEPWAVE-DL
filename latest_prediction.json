@@ -1,14 +1,14 @@
 {
-  "as_of_date": "2026-02-25",
-  "winner_model": "model_c",
-  "final_signal": "SLV",
-  "final_confidence": 0.2871,
+  "as_of_date": "2026-02-26",
+  "winner_model": "model_a",
+  "final_signal": "GLD",
+  "final_confidence": 0.4144,
   "tsl_status": {
     "two_day_cumul_pct": 0.26,
     "tsl_triggered": false,
     "in_cash": false,
-    "current_z": 1.094,
-    "z_reentry": 1.1,
+    "current_z": 1.72,
+    "z_reentry": 1.0,
     "tsl_pct": 10.0
   },
   "tbill_rate": 3.6,
@@ -16,43 +16,43 @@
     "model_a": {
       "model": "model_a",
       "lookback": 30,
-      "signal": "SLV",
-      "confidence": 0.2278,
-      "z_score": 1.611,
+      "signal": "GLD",
+      "confidence": 0.4144,
+      "z_score": 1.72,
       "probabilities": {
-        "TLT": 0.1956,
-        "TBT": 0.1756,
-        "VNQ": 0.1934,
-        "GLD": 0.2076,
-        "SLV": 0.2278
+        "TLT": 0.1789,
+        "TBT": 0.073,
+        "VNQ": 0.2473,
+        "GLD": 0.4144,
+        "SLV": 0.0865
       }
     },
     "model_b": {
       "model": "model_b",
-      "lookback": 45,
-      "signal": "VNQ",
-      "confidence": 0.2656,
-      "z_score": 1.646,
+      "lookback": 30,
+      "signal": "SLV",
+      "confidence": 0.2494,
+      "z_score": 1.388,
       "probabilities": {
-        "TLT": 0.1652,
-        "TBT": 0.1562,
-        "VNQ": 0.2656,
-        "GLD": 0.192,
-        "SLV": 0.221
+        "TLT": 0.1555,
+        "TBT": 0.2164,
+        "VNQ": 0.216,
+        "GLD": 0.1626,
+        "SLV": 0.2494
       }
     },
     "model_c": {
       "model": "model_c",
-      "lookback": 45,
-      "signal": "SLV",
-      "confidence": 0.2871,
-      "z_score": 1.094,
+      "lookback": 60,
+      "signal": "TBT",
+      "confidence": 0.2108,
+      "z_score": 1.572,
       "probabilities": {
-        "TLT": 0.2123,
-        "TBT": 0.204,
-        "VNQ": 0.2447,
-        "GLD": 0.0519,
-        "SLV": 0.2871
+        "TLT": 0.2045,
+        "TBT": 0.2108,
+        "VNQ": 0.1953,
+        "GLD": 0.198,
+        "SLV": 0.1914
       }
     }
   }
