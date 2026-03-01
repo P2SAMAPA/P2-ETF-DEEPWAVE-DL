@@ -600,6 +600,9 @@ winner    = evalu.get("winner", "model_a")
 tbill_rt  = pred.get("tbill_rate", 3.6)
 preds     = pred.get("predictions", {})
 tsl_stat  = pred.get("tsl_status", {})
+trained_from_year = pred.get("trained_from_year")
+trained_wavelet   = pred.get("trained_wavelet")
+trained_at        = pred.get("trained_at")
 
 # If prediction is stale or empty, run predict.py inline
 pred_date = pred.get("as_of_date", "")
@@ -688,10 +691,20 @@ else:
     now_est   = datetime.utcnow() - timedelta(hours=5)
     is_today  = (next_td == now_est.date())
     td_label  = "TODAY'S SIGNAL" if is_today else "NEXT TRADING DAY SIGNAL"
+    # Build training provenance stamp
+    if trained_from_year and trained_wavelet:
+        trained_at_str = f" · Generated {trained_at[:10]}" if trained_at else ""
+        provenance = f"Trained from {trained_from_year} · {trained_wavelet} wavelet{trained_at_str}"
+    else:
+        provenance = "Training metadata unavailable — retrain to stamp results"
+
     st.markdown(f"""
     <div class="hero-card">
       <div class="hero-label">{winner_label} · {td_label}</div>
       <div class="hero-value">🎯 {next_td} → {final_signal}</div>
+      <div class="hero-sub" style="margin-top:8px; font-size:13px; opacity:0.8;">
+        📋 {provenance}
+      </div>
     </div>""", unsafe_allow_html=True)
 
 # ── Signal Conviction ─────────────────────────────────────────────────────────
