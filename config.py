@@ -14,7 +14,7 @@ FRED_API_KEY    = os.getenv("FRED_API_KEY", "")
 GITHUB_TOKEN    = os.getenv("P2SAMAPA_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
 
 # ── Universe ───────────────────────────────────────────────────────────────────
-ETFS            = ["TLT", "TBT", "VNQ", "GLD", "SLV"]
+ETFS            = ["TLT", "VCIT", "LQD", "HYG", "VNQ", "GLD", "SLV"]
 BENCHMARKS      = ["SPY", "AGG"]
 ALL_TICKERS     = ETFS + BENCHMARKS
 
