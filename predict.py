@@ -295,6 +295,19 @@ def run_predict(tsl_pct=config.DEFAULT_TSL_PCT,
         final_signal     = wp.get("signal", "—")
         final_confidence = wp.get("confidence")
 
+    # Read training metadata from training_summary.json so UI can show
+    # which run produced this prediction (start year + wavelet)
+    trained_from_year = None
+    trained_wavelet   = None
+    trained_at        = None
+    summary_path = os.path.join(config.MODELS_DIR, "training_summary.json")
+    if os.path.exists(summary_path):
+        with open(summary_path) as _f:
+            _s = json.load(_f)
+        trained_from_year = _s.get("start_year")
+        trained_wavelet   = _s.get("wavelet")
+        trained_at        = _s.get("trained_at")
+
     output = dict(
         as_of_date       = str(next_td),
         winner_model     = winner_model,
@@ -303,6 +316,9 @@ def run_predict(tsl_pct=config.DEFAULT_TSL_PCT,
         tsl_status       = tsl_status,
         tbill_rate       = tbill_val,
         predictions      = predictions,
+        trained_from_year= trained_from_year,
+        trained_wavelet  = trained_wavelet,
+        trained_at       = trained_at,
     )
 
     with open("latest_prediction.json", "w") as f:
