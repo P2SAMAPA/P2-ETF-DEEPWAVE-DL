@@ -50,7 +50,7 @@ def select_best_lookback(results: list) -> int:
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-def run_training(models_to_train: list, epochs: int):
+def run_training(models_to_train: list, epochs: int, start_year: int = None, wavelet: str = None):
     print(f"\n{'='*60}")
     print(f"  Training started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Models: {models_to_train}  |  Max epochs: {epochs}")
@@ -114,8 +114,10 @@ def run_training(models_to_train: list, epochs: int):
         }
 
     # ── Save training summary ─────────────────────────────────────────────────
-    training_summary["trained_at"] = datetime.now().isoformat()
-    training_summary["epochs"]     = epochs
+    training_summary["trained_at"]  = datetime.now().isoformat()
+    training_summary["epochs"]      = epochs
+    training_summary["start_year"]  = start_year
+    training_summary["wavelet"]     = wavelet
     summary_path = os.path.join(config.MODELS_DIR, "training_summary.json")
     with open(summary_path, "w") as f:
         json.dump(training_summary, f, indent=2)
@@ -133,7 +135,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model",  default="all",
                         help="all | a | b | c | a,b | b,c etc.")
-    parser.add_argument("--epochs", type=int, default=config.MAX_EPOCHS)
+    parser.add_argument("--epochs",     type=int, default=config.MAX_EPOCHS)
+    parser.add_argument("--start_year", type=int, default=None,
+                        help="Training start year (e.g. 2015). Stamped into summary.")
+    parser.add_argument("--wavelet",    default=None,
+                        help="Wavelet key (e.g. db4). Stamped into summary.")
     args = parser.parse_args()
 
     if args.model == "all":
@@ -141,4 +147,6 @@ if __name__ == "__main__":
     else:
         models = [m.strip().lower() for m in args.model.split(",")]
 
-    run_training(models, args.epochs)
+    run_training(models, args.epochs,
+                 start_year=args.start_year,
+                 wavelet=args.wavelet)
