@@ -117,8 +117,10 @@ jobs:
           Z_REENTRY:       ${{ github.event.inputs.z_reentry  || '1.1' }}
         run: |
           python train.py \
-            --model "${{ github.event.inputs.model  || 'all' }}" \
-            --epochs "${{ github.event.inputs.epochs || '80' }}"
+            --model      "${{ github.event.inputs.model      || 'all' }}" \
+            --epochs     "${{ github.event.inputs.epochs     || '80' }}" \
+            --start_year "${{ github.event.inputs.start_year || '2008' }}" \
+            --wavelet    "${{ github.event.inputs.wavelet    || 'db4' }}"
 
       - name: Run evaluation
         env:
