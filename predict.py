@@ -305,7 +305,7 @@ def run_predict(tsl_pct=config.DEFAULT_TSL_PCT,
         with open(summary_path) as _f:
             _s = json.load(_f)
         trained_from_year = _s.get("start_year")
-        trained_wavelet   = _s.get("wavelet")
+        trained_wavelet   = _s.get("wavelet") or "db4"   # default if not stamped
         trained_at        = _s.get("trained_at")
 
     output = dict(
