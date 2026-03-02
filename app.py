@@ -617,6 +617,9 @@ if needs_refresh:
             tsl_stat = fresh.get("tsl_status", {})
             tbill_rt = fresh.get("tbill_rate", 3.6)
             as_of    = str(next_td)
+            trained_from_year = fresh.get("trained_from_year")
+            trained_wavelet   = fresh.get("trained_wavelet")
+            trained_at        = fresh.get("trained_at")
     except Exception as e:
         pass   # silently fall back to cached prediction
 
@@ -692,15 +695,9 @@ else:
     is_today  = (next_td == now_est.date())
     td_label  = "TODAY'S SIGNAL" if is_today else "NEXT TRADING DAY SIGNAL"
     # Build training provenance stamp
-    if trained_from_year or trained_wavelet or trained_at:
-        parts = []
-        if trained_from_year:
-            parts.append(f"Trained from {trained_from_year}")
-        if trained_wavelet:
-            parts.append(f"{trained_wavelet} wavelet")
-        if trained_at:
-            parts.append(f"Generated {trained_at[:10]}")
-        provenance = " · ".join(parts)
+    if trained_from_year and trained_wavelet:
+        trained_at_str = f" · Generated {trained_at[:10]}" if trained_at else ""
+        provenance = f"Trained from {trained_from_year} · {trained_wavelet} wavelet{trained_at_str}"
     else:
         provenance = "Training metadata unavailable — retrain to stamp results"
 
