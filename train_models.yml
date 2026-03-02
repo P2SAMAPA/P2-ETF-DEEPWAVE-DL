@@ -152,6 +152,33 @@ jobs:
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: python data_upload_hf.py --weights
 
+      # ── Push json results to HF Dataset so app.py can read them ───────────
+      - name: Push json results to HF Dataset
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+        run: |
+          python - <<'EOF'
+          import os
+          from huggingface_hub import HfApi, CommitOperationAdd
+          import config
+
+          api = HfApi(token=config.HF_TOKEN)
+          ops = []
+          for f in ["latest_prediction.json", "evaluation_results.json"]:
+              if os.path.exists(f):
+                  ops.append(CommitOperationAdd(path_in_repo=f, path_or_fileobj=f))
+                  print(f"  Adding {f}")
+          if ops:
+              api.create_commit(
+                  repo_id=config.HF_DATASET_REPO,
+                  repo_type="dataset",
+                  operations=ops,
+                  commit_message="[auto] Update prediction + evaluation results",
+              )
+              print(f"  Pushed {len(ops)} json files to HF Dataset")
+          EOF
+
       # ── Commit ONLY json results to GitHub (no binary files) ──────────────
       - name: Commit results to GitHub (json only, no weights)
         run: |
