@@ -604,24 +604,9 @@ trained_from_year = pred.get("trained_from_year")
 trained_wavelet   = pred.get("trained_wavelet")
 trained_at        = pred.get("trained_at")
 
-# If prediction is stale or empty, run predict.py inline
+# Always read from latest_prediction.json — never run inference inline
+# (weights live in HF Dataset, not in the Space filesystem)
 pred_date = pred.get("as_of_date", "")
-needs_refresh = (not preds) or (pred_date and pred_date < str(next_td))
-if needs_refresh:
-    try:
-        from predict import run_predict
-        fresh = run_predict(tsl_pct=tsl_pct, z_reentry=z_reentry)
-        if fresh and fresh.get("predictions"):
-            pred  = fresh
-            preds = fresh.get("predictions", {})
-            tsl_stat = fresh.get("tsl_status", {})
-            tbill_rt = fresh.get("tbill_rate", 3.6)
-            as_of    = str(next_td)
-            trained_from_year = fresh.get("trained_from_year")
-            trained_wavelet   = fresh.get("trained_wavelet")
-            trained_at        = fresh.get("trained_at")
-    except Exception as e:
-        pass   # silently fall back to cached prediction
 
 # TSL state
 live_z       = preds.get(winner, {}).get("z_score", 1.5)
