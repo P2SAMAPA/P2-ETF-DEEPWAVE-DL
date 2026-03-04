@@ -110,7 +110,8 @@ def last_trading_day(from_date: date = None) -> date:
 
 def trigger_github_training(start_year: int, wavelet: str,
                              tsl_pct: float, z_reentry: float,
-                             epochs: int, fee_bps: int) -> bool:
+                             epochs: int = 80, fee_bps: int = 10,
+                             sweep_mode: str = "") -> bool:
     """
     Trigger Train Models workflow via GitHub API workflow_dispatch.
     Requires GITHUB_TOKEN secret in HF Space.
@@ -132,6 +133,7 @@ def trigger_github_training(start_year: int, wavelet: str,
             "tsl_pct":    str(tsl_pct),
             "z_reentry":  str(z_reentry),
             "fee_bps":    str(fee_bps),
+            "sweep_mode": sweep_mode,
         }
     }
 
@@ -588,367 +590,722 @@ st.caption("Option A: Wavelet-CNN-LSTM · "
            "Option C: Wavelet-Parallel-Dual-Stream-CNN-LSTM")
 st.caption("Winner selected by highest raw annualised return on out-of-sample test set.")
 
-# Load outputs
-pred  = load_prediction()
-evalu = load_evaluation()
+# ── Sweep helpers ─────────────────────────────────────────────────────────────
+SWEEP_YEARS = [2008, 2013, 2015, 2017, 2019, 2021]
 
-# Correct signal date — today if pre-close, next trading day if post-close
-next_td   = current_signal_date()
-last_td   = last_trading_day()
-as_of     = pred.get("as_of_date", str(next_td))   # use next trading day
-winner    = evalu.get("winner", "model_a")
-tbill_rt  = pred.get("tbill_rate", 3.6)
-preds     = pred.get("predictions", {})
-tsl_stat  = pred.get("tsl_status", {})
-trained_from_year = pred.get("trained_from_year")
-trained_wavelet   = pred.get("trained_wavelet")
-trained_at        = pred.get("trained_at")
+def _today_est():
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    return (_dt.now(_tz.utc) - _td(hours=5)).date()
 
-# Always read from latest_prediction.json — never run inference inline
-# (weights live in HF Dataset, not in the Space filesystem)
-pred_date = pred.get("as_of_date", "")
+def _sweep_fname(year: int, for_date) -> str:
+    return f"sweep_{year}_{for_date.strftime('%Y%m%d')}.json"
 
-# TSL state
-live_z       = preds.get(winner, {}).get("z_score", 1.5)
-two_day_ret  = tsl_stat.get("two_day_cumul_pct", 0.0)
-tsl_triggered= float(two_day_ret) <= -tsl_pct
-in_cash_now  = tsl_triggered and (live_z < z_reentry)
+@st.cache_data(ttl=120)
+def _load_sweep_hf(date_str: str) -> dict:
+    """Load date-stamped sweep files from HF Dataset. Returns {year: data}."""
+    from datetime import date as _d
+    for_date = _d.fromisoformat(date_str)
+    cache = {}
+    try:
+        token   = os.getenv("HF_TOKEN", config.HF_TOKEN)
+        repo_id = config.HF_DATASET_REPO
+        for yr in SWEEP_YEARS:
+            fname = _sweep_fname(yr, for_date)
+            try:
+                path = hf_hub_download(repo_id=repo_id, filename=f"sweep/{fname}",
+                                       repo_type="dataset", token=token, force_download=True)
+                with open(path) as f:
+                    cache[yr] = json.load(f)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return cache
 
-# Best lookback from evaluation
-best_lb = evalu.get(winner, {}).get("lookback", 30)
+@st.cache_data(ttl=120)
+def _load_sweep_any() -> tuple:
+    """Load most recent sweep from HF Dataset regardless of date. Returns (cache, date)."""
+    from datetime import datetime as _dt2
+    from huggingface_hub import HfApi
+    found, best_date = {}, None
+    try:
+        token   = os.getenv("HF_TOKEN", config.HF_TOKEN)
+        repo_id = config.HF_DATASET_REPO
+        api     = HfApi()
+        files   = list(api.list_repo_files(repo_id=repo_id, repo_type="dataset", token=token))
+        for fpath in files:
+            fname = os.path.basename(fpath)
+            if fname.startswith("sweep_") and fname.endswith(".json"):
+                parts = fname.replace(".json","").split("_")
+                if len(parts) == 3:
+                    try:
+                        dt = _dt2.strptime(parts[2], "%Y%m%d").date()
+                        if best_date is None or dt > best_date:
+                            best_date = dt
+                    except Exception:
+                        pass
+        if best_date:
+            for yr in SWEEP_YEARS:
+                fname = _sweep_fname(yr, best_date)
+                try:
+                    path = hf_hub_download(repo_id=repo_id, filename=f"sweep/{fname}",
+                                           repo_type="dataset", token=token, force_download=True)
+                    with open(path) as f:
+                        found[yr] = json.load(f)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return found, best_date
 
-# ── Banners ───────────────────────────────────────────────────────────────────
-etf_df = load_etf_ret_fresh()
-st.markdown(f"""<div class="alert-green">
-  ✅ Dataset up to date through <b>{as_of}</b>. HF Space synced.
-</div>""", unsafe_allow_html=True)
+def _compute_consensus(sweep_data: dict) -> dict:
+    """40% Return · 20% Z · 20% Sharpe · 20% (-MaxDD), min-max normalised."""
+    rows = []
+    for yr, sig in sweep_data.items():
+        rows.append({
+            "year":       yr,
+            "signal":     sig.get("signal", "?"),
+            "ann_return": sig.get("ann_return", 0.0),
+            "z_score":    sig.get("z_score", 0.0),
+            "sharpe":     sig.get("sharpe", 0.0),
+            "max_dd":     sig.get("max_dd", 0.0),
+        })
+    if not rows:
+        return {}
+    import pandas as _pd
+    df = _pd.DataFrame(rows)
+    def _mm(s):
+        mn, mx = s.min(), s.max()
+        return (s - mn) / (mx - mn + 1e-9)
+    df["wtd"] = (0.40*_mm(df["ann_return"]) + 0.20*_mm(df["z_score"]) +
+                 0.20*_mm(df["sharpe"])      + 0.20*_mm(-df["max_dd"]))
+    etf_agg = {}
+    for _, row in df.iterrows():
+        e = row["signal"]
+        etf_agg.setdefault(e, {"years":[], "scores":[], "returns":[], "zs":[], "sharpes":[], "dds":[]})
+        etf_agg[e]["years"].append(row["year"])
+        etf_agg[e]["scores"].append(row["wtd"])
+        etf_agg[e]["returns"].append(row["ann_return"])
+        etf_agg[e]["zs"].append(row["z_score"])
+        etf_agg[e]["sharpes"].append(row["sharpe"])
+        etf_agg[e]["dds"].append(row["max_dd"])
+    total = sum(sum(v["scores"]) for v in etf_agg.values()) + 1e-9
+    summary = {}
+    for e, v in etf_agg.items():
+        cs = sum(v["scores"])
+        summary[e] = {
+            "cum_score":   round(cs, 4),
+            "score_share": round(cs / total, 3),
+            "n_years":     len(v["years"]),
+            "years":       v["years"],
+            "avg_return":  round(float(np.mean(v["returns"])), 4),
+            "avg_z":       round(float(np.mean(v["zs"])), 3),
+            "avg_sharpe":  round(float(np.mean(v["sharpes"])), 3),
+            "avg_max_dd":  round(float(np.mean(v["dds"])), 4),
+        }
+    winner_etf = max(summary, key=lambda e: summary[e]["cum_score"])
+    return {"winner": winner_etf, "etf_summary": summary,
+            "per_year": df.to_dict("records"), "n_years": len(rows)}
 
-if not etf_df.empty:
-    n_yrs = (etf_df.index.max() - etf_df.index.min()).days // 365
-    st.markdown(f"""<div class="alert-blue">
-      📅 <b>Data:</b> {etf_df.index.min().date()} → {etf_df.index.max().date()}
-      ({n_yrs} years) &nbsp;|&nbsp; Source: yfinance + FRED
+# ── Tabs ──────────────────────────────────────────────────────────────────────
+tab1, tab2 = st.tabs(["📊 Single-Year Results", "🔄 Multi-Year Consensus Sweep"])
+
+with tab1:
+     # ── TAB 1: Single-Year Results ───────────────────────────────────────────────
+     # Load outputs
+    pred  = load_prediction()
+    evalu = load_evaluation()
+
+    # Correct signal date — today if pre-close, next trading day if post-close
+    next_td   = current_signal_date()
+    last_td   = last_trading_day()
+    as_of     = pred.get("as_of_date", str(next_td))   # use next trading day
+    winner    = evalu.get("winner", "model_a")
+    tbill_rt  = pred.get("tbill_rate", 3.6)
+    preds     = pred.get("predictions", {})
+    tsl_stat  = pred.get("tsl_status", {})
+    trained_from_year = pred.get("trained_from_year")
+    trained_wavelet   = pred.get("trained_wavelet")
+    trained_at        = pred.get("trained_at")
+
+    # Always read from latest_prediction.json — never run inference inline
+    # (weights live in HF Dataset, not in the Space filesystem)
+    pred_date = pred.get("as_of_date", "")
+
+    # TSL state
+    live_z       = preds.get(winner, {}).get("z_score", 1.5)
+    two_day_ret  = tsl_stat.get("two_day_cumul_pct", 0.0)
+    tsl_triggered= float(two_day_ret) <= -tsl_pct
+    in_cash_now  = tsl_triggered and (live_z < z_reentry)
+
+    # Best lookback from evaluation
+    best_lb = evalu.get(winner, {}).get("lookback", 30)
+
+    # ── Banners ───────────────────────────────────────────────────────────────────
+    etf_df = load_etf_ret_fresh()
+    st.markdown(f"""<div class="alert-green">
+      ✅ Dataset up to date through <b>{as_of}</b>. HF Space synced.
     </div>""", unsafe_allow_html=True)
 
-n_feat = (len(config.ETFS)*2 + len(config.MACRO_SERIES)) * (config.WAVELET_LEVELS+1)
-st.markdown(f"""<div class="alert-blue">
-  🎯 <b>Targets:</b> {', '.join(config.ETFS)} &nbsp;·&nbsp;
-  <b>Features:</b> {n_feat} signals (wavelet-decomposed) &nbsp;·&nbsp;
-  <b>T-bill:</b> {tbill_rt:.2f}% &nbsp;·&nbsp;
-  <b>Wavelet:</b> {wavelet_key} &nbsp;·&nbsp;
-  <b>Split:</b> 80/10/10
-</div>""", unsafe_allow_html=True)
-
-st.markdown(f"""<div class="alert-yellow">
-  ⚠️ Optimal lookback: <b>{best_lb}d</b>
-  (auto-selected from 30 / 45 / 60 by lowest validation MSE)
-</div>""", unsafe_allow_html=True)
-
-st.markdown(f"""<div class="alert-yellow">
-  🛡️ <b>Risk Controls:</b> &nbsp;
-  Trailing Stop Loss: <b>−{tsl_pct}%</b> (2-day cumul.) &nbsp;·&nbsp;
-  CASH re-entry when Z ≥ <b>{z_reentry:.1f} σ</b> &nbsp;·&nbsp;
-  CASH earns 3m T-bill: <b>{tbill_rt:.2f}%</b>
-</div>""", unsafe_allow_html=True)
-
-if in_cash_now:
-    st.markdown(f"""<div class="alert-orange">
-      🔴 <b>CASH OVERRIDE ACTIVE</b> — 2-day cumulative return
-      ({float(two_day_ret):+.1f}%) breached −{tsl_pct}% TSL.
-      Holding CASH @ {tbill_rt:.2f}% T-bill until Z ≥ {z_reentry:.1f} σ.
-      Current Z = {live_z:.2f} σ.
-    </div>""", unsafe_allow_html=True)
-
-# ── Signal Hero ───────────────────────────────────────────────────────────────
-winner_label = {"model_a":"Option A","model_b":"Option B",
-                "model_c":"Option C"}.get(winner, "Option A")
-
-if in_cash_now:
-    st.markdown(f"""
-    <div class="cash-card">
-      <div class="hero-label">⚠️ Trailing Stop Loss Triggered · Risk Override</div>
-      <div class="hero-value">💵 {next_td} → CASH</div>
-      <div class="hero-sub">
-        Earning 3m T-bill: <b>{tbill_rt:.2f}% p.a.</b> &nbsp;|&nbsp;
-        Re-entry when Z ≥ {z_reentry:.1f} σ &nbsp;|&nbsp; Current Z = {live_z:.2f} σ
-      </div>
-    </div>""", unsafe_allow_html=True)
-else:
-    wp           = preds.get(winner, {})
-    final_signal = wp.get("signal", "—")
-    now_est   = datetime.utcnow() - timedelta(hours=5)
-    is_today  = (next_td == now_est.date())
-    td_label  = "TODAY'S SIGNAL" if is_today else "NEXT TRADING DAY SIGNAL"
-    # Build training provenance stamp
-    if trained_from_year and trained_wavelet:
-        trained_at_str = f" · Generated {trained_at[:10]}" if trained_at else ""
-        provenance = f"Trained from {trained_from_year} · {trained_wavelet} wavelet{trained_at_str}"
-    else:
-        provenance = "Training metadata unavailable — retrain to stamp results"
-
-    st.markdown(f"""
-    <div class="hero-card">
-      <div class="hero-label">{winner_label} · {td_label}</div>
-      <div class="hero-value">🎯 {next_td} → {final_signal}</div>
-      <div class="hero-sub" style="margin-top:8px; font-size:13px; opacity:0.8;">
-        📋 {provenance}
-      </div>
-    </div>""", unsafe_allow_html=True)
-
-# ── Signal Conviction ─────────────────────────────────────────────────────────
-st.markdown("---")
-wp = preds.get(winner, {})
-if wp and not in_cash_now:
-    z_val   = float(wp.get("z_score", 0))
-    probs   = wp.get("probabilities", {})
-    top_etf = wp.get("signal", "—")
-    conf    = float(wp.get("confidence", 0))
-
-    if z_val >= 2.0:   strength = "Very High"
-    elif z_val >= 1.5: strength = "High"
-    elif z_val >= 1.0: strength = "Moderate"
-    else:              strength = "Low"
-
-    st.markdown(f"### 🟢 Signal Conviction &nbsp; `Z = {z_val:.2f} σ` &nbsp; **{strength}**")
-
-    fig_bar = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=z_val,
-        number={"suffix":" σ","font":{"size":24}},
-        gauge=dict(
-            axis=dict(range=[-3,3]),
-            bar=dict(color="#00bfa5"),
-            steps=[
-                dict(range=[-3,-1],color="#ffb3b3"),
-                dict(range=[-1, 0],color="#ffe0b2"),
-                dict(range=[ 0, 1],color="#b2dfdb"),
-                dict(range=[ 1, 3],color="#80cbc4"),
-            ],
-            threshold=dict(line=dict(color="#00897b",width=4),
-                           thickness=0.75,value=z_reentry),
-        ),
-        title={"text":"Weak −3σ → Strong +3σ"},
-    ))
-    fig_bar.update_layout(height=200, margin=dict(t=30,b=0,l=30,r=30))
-    st.plotly_chart(fig_bar, use_container_width=True)
-
-    st.markdown("**MODEL PROBABILITY BY ETF**")
-    prob_cols = st.columns(len(probs))
-    for i, (etf, p) in enumerate(sorted(probs.items(), key=lambda x:-x[1])):
-        with prob_cols[i]:
-            is_top = etf == top_etf
-            color  = "#007a69" if is_top else "#555"
-            bg     = "#e8faf8" if is_top else "#f7f8fa"
-            border = "#00bfa5" if is_top else "#ddd"
-            prefix = "★ " if is_top else ""
-            st.markdown(
-                f'<div style="border:1.5px solid {border};border-radius:20px;'
-                f'padding:6px 12px;text-align:center;background:{bg};'
-                f'color:{color};font-weight:{"700" if is_top else "500"};'
-                f'font-size:13px;">{prefix}{etf} {p:.3f}</div>',
-                unsafe_allow_html=True)
-
-    st.caption(
-        f"Z-score = std deviations the top ETF probability sits above the mean. "
-        f"Higher → model is more decisive. "
-        f"⚠️ CASH override triggers if 2-day cumul ≤ −{tsl_pct}%, "
-        f"exits when Z ≥ {z_reentry:.1f} σ."
-    )
-
-# ── All Models Signals ────────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown(f"### 📅 All Models — {next_td} Signals")
-st.caption(f"⚠️ Lookback {best_lb}d found optimal "
-           f"(auto-selected from 30 / 45 / 60d by lowest val MSE)")
-
-col_a, col_b, col_c = st.columns(3)
-model_info = [
-    ("model_a","OPTION A", "#00bfa5", col_a, "model-card-a"),
-    ("model_b","OPTION B", "#7b8ff7", col_b, "model-card-b"),
-    ("model_c","OPTION C", "#f87171", col_c, "model-card-c"),
-]
-for key, label, color, col, css in model_info:
-    with col:
-        p    = preds.get(key, {})
-        sig  = "CASH" if in_cash_now else p.get("signal","—")
-        conf = float(p.get("confidence", 0))
-        z_v  = float(p.get("z_score", 0))
-        is_w = (key == winner)
-        w_tag= " ★" if is_w else ""
-        st.markdown(f"""
-        <div class="{css}">
-          <div style="font-size:11px;letter-spacing:2px;font-weight:600;
-                      color:{color};margin-bottom:12px;">{label}{w_tag}</div>
-          <div style="font-size:28px;font-weight:700;margin-bottom:8px;">{sig}</div>
-          <div style="font-size:13px;color:#aaa;">
-            Confidence: <span style="color:{color};font-weight:600;">
-            {"CASH" if in_cash_now else f"{conf:.1%}"}</span>
-          </div>
-          <div style="font-size:12px;color:#666;margin-top:6px;">Z = {z_v:.2f} σ</div>
+    if not etf_df.empty:
+        n_yrs = (etf_df.index.max() - etf_df.index.min()).days // 365
+        st.markdown(f"""<div class="alert-blue">
+          📅 <b>Data:</b> {etf_df.index.min().date()} → {etf_df.index.max().date()}
+          ({n_yrs} years) &nbsp;|&nbsp; Source: yfinance + FRED
         </div>""", unsafe_allow_html=True)
 
-# ── Performance Metrics ───────────────────────────────────────────────────────
-st.markdown("---")
-winner_full = {"model_a":"Option A · Wavelet-CNN-LSTM",
-               "model_b":"Option B · Wavelet-Attn-CNN-LSTM",
-               "model_c":"Option C · Wavelet-Dual-Stream"}.get(winner, winner)
-st.markdown(f"### 📊 {winner_full} — Performance Metrics")
-
-w_met = evalu.get(winner, {}).get("metrics", {})
-if w_met:
-    m1,m2,m3,m4,m5 = st.columns(5)
-    with m1:
-        ann = w_met.get("ann_return", 0)
-        vs  = w_met.get("vs_spy", 0)
-        st.metric("📈 Ann. Return", f"{ann:.2f}%", delta=f"vs SPY: {vs:+.2f}%")
-        st.caption("Annualised")
-    with m2:
-        sh  = w_met.get("sharpe", 0)
-        st.metric("📊 Sharpe", f"{sh:.2f}")
-        st.caption("Strong" if sh>1 else ("Moderate" if sh>0.5 else "Weak"))
-    with m3:
-        hr  = w_met.get("hit_ratio_15d", 0)
-        st.metric("🎯 Hit Ratio 15d", f"{hr:.0%}")
-        st.caption("Good" if hr>0.55 else "Weak")
-    with m4:
-        mdd = w_met.get("max_drawdown", 0)
-        st.metric("📉 Max Drawdown", f"{mdd:.2f}%")
-        st.caption("Peak to Trough")
-    with m5:
-        mdd_d = w_met.get("max_daily_dd", 0)
-        st.metric("⚠️ Max Daily DD", f"{mdd_d:.2f}%")
-        st.caption("Worst Single Day")
-
-# ── Approach Comparison ───────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown("### 🏆 Approach Comparison (Winner = Highest Raw Annualised Return)")
-rows = []
-for key, lbl in [("model_a","Option A · Wavelet-CNN-LSTM"),
-                  ("model_b","Option B · Wavelet-Attn-CNN-LSTM"),
-                  ("model_c","Option C · Wavelet-Dual-Stream")]:
-    m = evalu.get(key, {}).get("metrics", {})
-    if m:
-        lb_k    = evalu.get(key, {}).get("lookback", "—")
-        p_info  = preds.get(key, {})
-        sig     = "CASH" if in_cash_now else p_info.get("signal", "—")
-        conf    = float(p_info.get("confidence", 0))
-        rows.append({
-            "Model"          : lbl,
-            "Lookback"       : f"{lb_k}d",
-            f"Signal {next_td}": sig,
-            "Confidence"     : f"{conf:.1%}" if conf > 0 else "—",
-            "Ann. Return"    : f"{m.get('ann_return',0):.2f}%",
-            "Sharpe"         : f"{m.get('sharpe',0):.2f}",
-            "Hit Ratio (15d)": f"{m.get('hit_ratio_15d',0):.0%}",
-            "Max Drawdown"   : f"{m.get('max_drawdown',0):.2f}%",
-            "Winner"         : "⭐ WINNER" if key==winner else "",
-        })
-if rows:
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-# ── Benchmark Comparison (NO AR(1)) ──────────────────────────────────────────
-st.markdown("### 📋 Benchmark Comparison")
-bench_rows = []
-for key, lbl in [(winner, f"{winner_full} (Winner)"),
-                  ("SPY","SPY (Buy & Hold)"),
-                  ("AGG","AGG (Buy & Hold)")]:
-    b   = evalu.get(key, {})
-    m   = b.get("metrics", b) if isinstance(b, dict) else {}
-    ann = m.get("ann_return", b.get("ann_return","—"))
-    bench_rows.append({
-        "Strategy"    : lbl,
-        "Ann. Return" : f"{ann:.2f}%" if isinstance(ann,(int,float)) else ann,
-        "Sharpe"      : f"{m.get('sharpe','—'):.2f}" if m.get("sharpe") else "—",
-        "Max Drawdown": f"{m.get('max_drawdown','—'):.2f}%" if m.get("max_drawdown") else "—",
-    })
-if bench_rows:
-    st.dataframe(pd.DataFrame(bench_rows), use_container_width=True, hide_index=True)
-
-# ── Cumulative Return Chart ───────────────────────────────────────────────────
-st.markdown("---")
-st.markdown("### 📈 Cumulative Return — Test Period")
-fig = go.Figure()
-colors_map = {"model_a":"#00bfa5","model_b":"#7b8ff7","model_c":"#f87171"}
-for key, lbl in [("model_a","Option A"),
-                  ("model_b","Option B"),
-                  ("model_c","Option C")]:
-    sigs = evalu.get(key,{}).get("all_signals",[])
-    if sigs:
-        df_s = apply_tsl_to_audit(sigs, tsl_pct, z_reentry, tbill_rt)
-        if "Date" in df_s.columns and "Net_TSL" in df_s.columns:
-            df_s["Date"]  = pd.to_datetime(df_s["Date"])
-            df_s["Cumul"] = (1 + df_s["Net_TSL"]).cumprod()
-            fig.add_trace(go.Scatter(
-                x=df_s["Date"], y=df_s["Cumul"],
-                name=lbl, line=dict(color=colors_map[key], width=2)))
-fig.update_layout(
-    height=350, margin=dict(t=20,b=20),
-    yaxis_title="Growth of $1", xaxis_title="Date",
-    legend=dict(orientation="h", yanchor="bottom", y=1.02),
-    plot_bgcolor="white", paper_bgcolor="white",
-)
-fig.update_xaxes(showgrid=True, gridcolor="#f0f2f5")
-fig.update_yaxes(showgrid=True, gridcolor="#f0f2f5")
-st.plotly_chart(fig, use_container_width=True)
-
-# ── Uniform probability warning ───────────────────────────────────────────────
-winner_pred_info = preds.get(winner, {})
-all_probs = list(winner_pred_info.get("probabilities", {}).values())
-if all_probs and max(all_probs) < 0.25:
-    st.markdown("""<div class="alert-orange">
-      ⚠️ <b>Model probabilities are near-uniform (≈20% each)</b> — the current weights
-      were trained before the latest architecture improvements (class weights,
-      BatchNormalization, val_accuracy early stopping). A <b>retrain is needed</b>
-      to get meaningful ETF discrimination. Run <b>GitHub Actions → Train Models</b>
-      or click <b>🚀 Retrain All 3 Models</b> in the sidebar.
-      The hero signal (GLD) is still valid — it is the argmax of the distribution
-      even when flat.
+    n_feat = (len(config.ETFS)*2 + len(config.MACRO_SERIES)) * (config.WAVELET_LEVELS+1)
+    st.markdown(f"""<div class="alert-blue">
+      🎯 <b>Targets:</b> {', '.join(config.ETFS)} &nbsp;·&nbsp;
+      <b>Features:</b> {n_feat} signals (wavelet-decomposed) &nbsp;·&nbsp;
+      <b>T-bill:</b> {tbill_rt:.2f}% &nbsp;·&nbsp;
+      <b>Wavelet:</b> {wavelet_key} &nbsp;·&nbsp;
+      <b>Split:</b> 80/10/10
     </div>""", unsafe_allow_html=True)
 
-# ── Audit Trail ───────────────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown(f"### 📋 Audit Trail — {winner_full} (Last 30 Trading Days)")
-audit_raw = evalu.get(winner, {}).get("audit_tail", [])
+    st.markdown(f"""<div class="alert-yellow">
+      ⚠️ Optimal lookback: <b>{best_lb}d</b>
+      (auto-selected from 30 / 45 / 60 by lowest validation MSE)
+    </div>""", unsafe_allow_html=True)
 
-# Extend with any live dates beyond the stored test set
-if audit_raw:
-    audit_raw = extend_audit_with_live_dates(audit_raw, winner_pred_info)
+    st.markdown(f"""<div class="alert-yellow">
+      🛡️ <b>Risk Controls:</b> &nbsp;
+      Trailing Stop Loss: <b>−{tsl_pct}%</b> (2-day cumul.) &nbsp;·&nbsp;
+      CASH re-entry when Z ≥ <b>{z_reentry:.1f} σ</b> &nbsp;·&nbsp;
+      CASH earns 3m T-bill: <b>{tbill_rt:.2f}%</b>
+    </div>""", unsafe_allow_html=True)
 
-if audit_raw:
-    df_audit = apply_tsl_to_audit(audit_raw, tsl_pct, z_reentry, tbill_rt)
-    disp = df_audit[["Date","Signal_TSL","Confidence","Z_Score",
-                      "Net_TSL","Mode"]].copy()
-    disp.columns = ["Date","Signal","Confidence","Z Score","Net Return","Mode"]
-    disp["Date"]       = pd.to_datetime(disp["Date"], format="mixed").dt.strftime("%Y-%m-%d")
-    disp["Confidence"] = disp["Confidence"].apply(
-        lambda x: f"{float(x):.1%}" if isinstance(x,(int,float)) else x)
-    disp["Z Score"]    = disp["Z Score"].apply(
-        lambda x: f"{float(x):.2f}" if isinstance(x,(int,float)) else x)
-    disp["Net Return"] = disp["Net Return"].apply(
-        lambda x: f"+{x*100:.2f}%" if float(x)>=0 else f"{x*100:.2f}%")
+    if in_cash_now:
+        st.markdown(f"""<div class="alert-orange">
+          🔴 <b>CASH OVERRIDE ACTIVE</b> — 2-day cumulative return
+          ({float(two_day_ret):+.1f}%) breached −{tsl_pct}% TSL.
+          Holding CASH @ {tbill_rt:.2f}% T-bill until Z ≥ {z_reentry:.1f} σ.
+          Current Z = {live_z:.2f} σ.
+        </div>""", unsafe_allow_html=True)
 
-    def color_ret(val):
-        if "+" in str(val): return "color:#27ae60;font-weight:600"
-        if "-" in str(val): return "color:#e74c3c;font-weight:600"
-        return ""
-    def color_mode(val):
-        if "CASH" in str(val): return "background-color:#fff8f5;color:#e65100"
-        return "background-color:#f0fdf9;color:#007a69"
+    # ── Signal Hero ───────────────────────────────────────────────────────────────
+    winner_label = {"model_a":"Option A","model_b":"Option B",
+                    "model_c":"Option C"}.get(winner, "Option A")
 
-    styled = disp.style.applymap(color_ret, subset=["Net Return"]) \
-                        .applymap(color_mode, subset=["Mode"])
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    if in_cash_now:
+        st.markdown(f"""
+        <div class="cash-card">
+          <div class="hero-label">⚠️ Trailing Stop Loss Triggered · Risk Override</div>
+          <div class="hero-value">💵 {next_td} → CASH</div>
+          <div class="hero-sub">
+            Earning 3m T-bill: <b>{tbill_rt:.2f}% p.a.</b> &nbsp;|&nbsp;
+            Re-entry when Z ≥ {z_reentry:.1f} σ &nbsp;|&nbsp; Current Z = {live_z:.2f} σ
+          </div>
+        </div>""", unsafe_allow_html=True)
+    else:
+        wp           = preds.get(winner, {})
+        final_signal = wp.get("signal", "—")
+        now_est   = datetime.utcnow() - timedelta(hours=5)
+        is_today  = (next_td == now_est.date())
+        td_label  = "TODAY'S SIGNAL" if is_today else "NEXT TRADING DAY SIGNAL"
+        # Build training provenance stamp
+        if trained_from_year and trained_wavelet:
+            trained_at_str = f" · Generated {trained_at[:10]}" if trained_at else ""
+            provenance = f"Trained from {trained_from_year} · {trained_wavelet} wavelet{trained_at_str}"
+        else:
+            provenance = "Training metadata unavailable — retrain to stamp results"
 
-    latest_date = disp["Date"].iloc[-1]
-    if latest_date < str(next_td):
-        st.caption(f"⚠️ Audit trail through {latest_date}. "
-                   f"Rows up to {next_td} will appear after next retrain.")
+        st.markdown(f"""
+        <div class="hero-card">
+          <div class="hero-label">{winner_label} · {td_label}</div>
+          <div class="hero-value">🎯 {next_td} → {final_signal}</div>
+          <div class="hero-sub" style="margin-top:8px; font-size:13px; opacity:0.8;">
+            📋 {provenance}
+          </div>
+        </div>""", unsafe_allow_html=True)
 
-# ── Footer ────────────────────────────────────────────────────────────────────
-st.markdown("---")
-st.caption(
-    f"P2-ETF-DEEPWAVE-DL · GitHub: {config.GITHUB_REPO} · "
-    f"HF: {config.HF_DATASET_REPO} · "
-    f"Wavelet: {wavelet_key} · Split: 80/10/10 · "
-    f"Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC"
-)
+    # ── Signal Conviction ─────────────────────────────────────────────────────────
+    st.markdown("---")
+    wp = preds.get(winner, {})
+    if wp and not in_cash_now:
+        z_val   = float(wp.get("z_score", 0))
+        probs   = wp.get("probabilities", {})
+        top_etf = wp.get("signal", "—")
+        conf    = float(wp.get("confidence", 0))
+
+        if z_val >= 2.0:   strength = "Very High"
+        elif z_val >= 1.5: strength = "High"
+        elif z_val >= 1.0: strength = "Moderate"
+        else:              strength = "Low"
+
+        st.markdown(f"### 🟢 Signal Conviction &nbsp; `Z = {z_val:.2f} σ` &nbsp; **{strength}**")
+
+        fig_bar = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=z_val,
+            number={"suffix":" σ","font":{"size":24}},
+            gauge=dict(
+                axis=dict(range=[-3,3]),
+                bar=dict(color="#00bfa5"),
+                steps=[
+                    dict(range=[-3,-1],color="#ffb3b3"),
+                    dict(range=[-1, 0],color="#ffe0b2"),
+                    dict(range=[ 0, 1],color="#b2dfdb"),
+                    dict(range=[ 1, 3],color="#80cbc4"),
+                ],
+                threshold=dict(line=dict(color="#00897b",width=4),
+                               thickness=0.75,value=z_reentry),
+            ),
+            title={"text":"Weak −3σ → Strong +3σ"},
+        ))
+        fig_bar.update_layout(height=200, margin=dict(t=30,b=0,l=30,r=30))
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+        st.markdown("**MODEL PROBABILITY BY ETF**")
+        prob_cols = st.columns(len(probs))
+        for i, (etf, p) in enumerate(sorted(probs.items(), key=lambda x:-x[1])):
+            with prob_cols[i]:
+                is_top = etf == top_etf
+                color  = "#007a69" if is_top else "#555"
+                bg     = "#e8faf8" if is_top else "#f7f8fa"
+                border = "#00bfa5" if is_top else "#ddd"
+                prefix = "★ " if is_top else ""
+                st.markdown(
+                    f'<div style="border:1.5px solid {border};border-radius:20px;'
+                    f'padding:6px 12px;text-align:center;background:{bg};'
+                    f'color:{color};font-weight:{"700" if is_top else "500"};'
+                    f'font-size:13px;">{prefix}{etf} {p:.3f}</div>',
+                    unsafe_allow_html=True)
+
+        st.caption(
+            f"Z-score = std deviations the top ETF probability sits above the mean. "
+            f"Higher → model is more decisive. "
+            f"⚠️ CASH override triggers if 2-day cumul ≤ −{tsl_pct}%, "
+            f"exits when Z ≥ {z_reentry:.1f} σ."
+        )
+
+    # ── All Models Signals ────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(f"### 📅 All Models — {next_td} Signals")
+    st.caption(f"⚠️ Lookback {best_lb}d found optimal "
+               f"(auto-selected from 30 / 45 / 60d by lowest val MSE)")
+
+    col_a, col_b, col_c = st.columns(3)
+    model_info = [
+        ("model_a","OPTION A", "#00bfa5", col_a, "model-card-a"),
+        ("model_b","OPTION B", "#7b8ff7", col_b, "model-card-b"),
+        ("model_c","OPTION C", "#f87171", col_c, "model-card-c"),
+    ]
+    for key, label, color, col, css in model_info:
+        with col:
+            p    = preds.get(key, {})
+            sig  = "CASH" if in_cash_now else p.get("signal","—")
+            conf = float(p.get("confidence", 0))
+            z_v  = float(p.get("z_score", 0))
+            is_w = (key == winner)
+            w_tag= " ★" if is_w else ""
+            st.markdown(f"""
+            <div class="{css}">
+              <div style="font-size:11px;letter-spacing:2px;font-weight:600;
+                          color:{color};margin-bottom:12px;">{label}{w_tag}</div>
+              <div style="font-size:28px;font-weight:700;margin-bottom:8px;">{sig}</div>
+              <div style="font-size:13px;color:#aaa;">
+                Confidence: <span style="color:{color};font-weight:600;">
+                {"CASH" if in_cash_now else f"{conf:.1%}"}</span>
+              </div>
+              <div style="font-size:12px;color:#666;margin-top:6px;">Z = {z_v:.2f} σ</div>
+            </div>""", unsafe_allow_html=True)
+
+    # ── Performance Metrics ───────────────────────────────────────────────────────
+    st.markdown("---")
+    winner_full = {"model_a":"Option A · Wavelet-CNN-LSTM",
+                   "model_b":"Option B · Wavelet-Attn-CNN-LSTM",
+                   "model_c":"Option C · Wavelet-Dual-Stream"}.get(winner, winner)
+    st.markdown(f"### 📊 {winner_full} — Performance Metrics")
+
+    w_met = evalu.get(winner, {}).get("metrics", {})
+    if w_met:
+        m1,m2,m3,m4,m5 = st.columns(5)
+        with m1:
+            ann = w_met.get("ann_return", 0)
+            vs  = w_met.get("vs_spy", 0)
+            st.metric("📈 Ann. Return", f"{ann:.2f}%", delta=f"vs SPY: {vs:+.2f}%")
+            st.caption("Annualised")
+        with m2:
+            sh  = w_met.get("sharpe", 0)
+            st.metric("📊 Sharpe", f"{sh:.2f}")
+            st.caption("Strong" if sh>1 else ("Moderate" if sh>0.5 else "Weak"))
+        with m3:
+            hr  = w_met.get("hit_ratio_15d", 0)
+            st.metric("🎯 Hit Ratio 15d", f"{hr:.0%}")
+            st.caption("Good" if hr>0.55 else "Weak")
+        with m4:
+            mdd = w_met.get("max_drawdown", 0)
+            st.metric("📉 Max Drawdown", f"{mdd:.2f}%")
+            st.caption("Peak to Trough")
+        with m5:
+            mdd_d = w_met.get("max_daily_dd", 0)
+            st.metric("⚠️ Max Daily DD", f"{mdd_d:.2f}%")
+            st.caption("Worst Single Day")
+
+    # ── Approach Comparison ───────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🏆 Approach Comparison (Winner = Highest Raw Annualised Return)")
+    rows = []
+    for key, lbl in [("model_a","Option A · Wavelet-CNN-LSTM"),
+                      ("model_b","Option B · Wavelet-Attn-CNN-LSTM"),
+                      ("model_c","Option C · Wavelet-Dual-Stream")]:
+        m = evalu.get(key, {}).get("metrics", {})
+        if m:
+            lb_k    = evalu.get(key, {}).get("lookback", "—")
+            p_info  = preds.get(key, {})
+            sig     = "CASH" if in_cash_now else p_info.get("signal", "—")
+            conf    = float(p_info.get("confidence", 0))
+            rows.append({
+                "Model"          : lbl,
+                "Lookback"       : f"{lb_k}d",
+                f"Signal {next_td}": sig,
+                "Confidence"     : f"{conf:.1%}" if conf > 0 else "—",
+                "Ann. Return"    : f"{m.get('ann_return',0):.2f}%",
+                "Sharpe"         : f"{m.get('sharpe',0):.2f}",
+                "Hit Ratio (15d)": f"{m.get('hit_ratio_15d',0):.0%}",
+                "Max Drawdown"   : f"{m.get('max_drawdown',0):.2f}%",
+                "Winner"         : "⭐ WINNER" if key==winner else "",
+            })
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # ── Benchmark Comparison (NO AR(1)) ──────────────────────────────────────────
+    st.markdown("### 📋 Benchmark Comparison")
+    bench_rows = []
+    for key, lbl in [(winner, f"{winner_full} (Winner)"),
+                      ("SPY","SPY (Buy & Hold)"),
+                      ("AGG","AGG (Buy & Hold)")]:
+        b   = evalu.get(key, {})
+        m   = b.get("metrics", b) if isinstance(b, dict) else {}
+        ann = m.get("ann_return", b.get("ann_return","—"))
+        bench_rows.append({
+            "Strategy"    : lbl,
+            "Ann. Return" : f"{ann:.2f}%" if isinstance(ann,(int,float)) else ann,
+            "Sharpe"      : f"{m.get('sharpe','—'):.2f}" if m.get("sharpe") else "—",
+            "Max Drawdown": f"{m.get('max_drawdown','—'):.2f}%" if m.get("max_drawdown") else "—",
+        })
+    if bench_rows:
+        st.dataframe(pd.DataFrame(bench_rows), use_container_width=True, hide_index=True)
+
+    # ── Cumulative Return Chart ───────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📈 Cumulative Return — Test Period")
+    fig = go.Figure()
+    colors_map = {"model_a":"#00bfa5","model_b":"#7b8ff7","model_c":"#f87171"}
+    for key, lbl in [("model_a","Option A"),
+                      ("model_b","Option B"),
+                      ("model_c","Option C")]:
+        sigs = evalu.get(key,{}).get("all_signals",[])
+        if sigs:
+            df_s = apply_tsl_to_audit(sigs, tsl_pct, z_reentry, tbill_rt)
+            if "Date" in df_s.columns and "Net_TSL" in df_s.columns:
+                df_s["Date"]  = pd.to_datetime(df_s["Date"])
+                df_s["Cumul"] = (1 + df_s["Net_TSL"]).cumprod()
+                fig.add_trace(go.Scatter(
+                    x=df_s["Date"], y=df_s["Cumul"],
+                    name=lbl, line=dict(color=colors_map[key], width=2)))
+    fig.update_layout(
+        height=350, margin=dict(t=20,b=20),
+        yaxis_title="Growth of $1", xaxis_title="Date",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        plot_bgcolor="white", paper_bgcolor="white",
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#f0f2f5")
+    fig.update_yaxes(showgrid=True, gridcolor="#f0f2f5")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Uniform probability warning ───────────────────────────────────────────────
+    winner_pred_info = preds.get(winner, {})
+    all_probs = list(winner_pred_info.get("probabilities", {}).values())
+    if all_probs and max(all_probs) < 0.25:
+        st.markdown("""<div class="alert-orange">
+          ⚠️ <b>Model probabilities are near-uniform (≈20% each)</b> — the current weights
+          were trained before the latest architecture improvements (class weights,
+          BatchNormalization, val_accuracy early stopping). A <b>retrain is needed</b>
+          to get meaningful ETF discrimination. Run <b>GitHub Actions → Train Models</b>
+          or click <b>🚀 Retrain All 3 Models</b> in the sidebar.
+          The hero signal (GLD) is still valid — it is the argmax of the distribution
+          even when flat.
+        </div>""", unsafe_allow_html=True)
+
+    # ── Audit Trail ───────────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(f"### 📋 Audit Trail — {winner_full} (Last 30 Trading Days)")
+    audit_raw = evalu.get(winner, {}).get("audit_tail", [])
+
+    # Extend with any live dates beyond the stored test set
+    if audit_raw:
+        audit_raw = extend_audit_with_live_dates(audit_raw, winner_pred_info)
+
+    if audit_raw:
+        df_audit = apply_tsl_to_audit(audit_raw, tsl_pct, z_reentry, tbill_rt)
+        disp = df_audit[["Date","Signal_TSL","Confidence","Z_Score",
+                          "Net_TSL","Mode"]].copy()
+        disp.columns = ["Date","Signal","Confidence","Z Score","Net Return","Mode"]
+        disp["Date"]       = pd.to_datetime(disp["Date"], format="mixed").dt.strftime("%Y-%m-%d")
+        disp["Confidence"] = disp["Confidence"].apply(
+            lambda x: f"{float(x):.1%}" if isinstance(x,(int,float)) else x)
+        disp["Z Score"]    = disp["Z Score"].apply(
+            lambda x: f"{float(x):.2f}" if isinstance(x,(int,float)) else x)
+        disp["Net Return"] = disp["Net Return"].apply(
+            lambda x: f"+{x*100:.2f}%" if float(x)>=0 else f"{x*100:.2f}%")
+
+        def color_ret(val):
+            if "+" in str(val): return "color:#27ae60;font-weight:600"
+            if "-" in str(val): return "color:#e74c3c;font-weight:600"
+            return ""
+        def color_mode(val):
+            if "CASH" in str(val): return "background-color:#fff8f5;color:#e65100"
+            return "background-color:#f0fdf9;color:#007a69"
+
+        styled = disp.style.applymap(color_ret, subset=["Net Return"]) \
+                            .applymap(color_mode, subset=["Mode"])
+        st.dataframe(styled, use_container_width=True, hide_index=True)
+
+        latest_date = disp["Date"].iloc[-1]
+        if latest_date < str(next_td):
+            st.caption(f"⚠️ Audit trail through {latest_date}. "
+                       f"Rows up to {next_td} will appear after next retrain.")
+
+    # ── Footer ────────────────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.caption(
+        f"P2-ETF-DEEPWAVE-DL · GitHub: {config.GITHUB_REPO} · "
+        f"HF: {config.HF_DATASET_REPO} · "
+        f"Wavelet: {wavelet_key} · Split: 80/10/10 · "
+        f"Last refresh: {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — Multi-Year Consensus Sweep
+# ═══════════════════════════════════════════════════════════════════════════════
+ETF_COLORS_SW = {
+    "TLT":"#4e79a7","VCIT":"#f28e2b","LQD":"#59a14f","HYG":"#e15759",
+    "VNQ":"#76b7b2","SLV":"#edc948","GLD":"#b07aa1","CASH":"#aaaaaa",
+}
+
+with tab2:
+    st.subheader("🔄 Multi-Year Consensus Sweep")
+    st.markdown(
+        "Trains the winning wavelet model across **6 start years** and aggregates "
+        "signals into a weighted consensus.  \n"
+        f"**Sweep years:** {', '.join(str(y) for y in SWEEP_YEARS)}  &nbsp;·&nbsp;  "
+        "**Score:** 40% Return · 20% Z · 20% Sharpe · 20% (–MaxDD)  \n"
+        "Auto-runs daily at **8pm EST**. Results are date-stamped — stale cache never shown."
+    )
+
+    today_sw   = _today_est()
+    today_str  = str(today_sw)
+
+    # Load today's cache from HF, fall back to previous day
+    today_cache = _load_sweep_hf(today_str)
+    prev_cache, prev_date = _load_sweep_any()
+    if prev_date == today_sw:
+        prev_cache, prev_date = {}, None
+
+    sweep_complete = len(today_cache) == len(SWEEP_YEARS)
+    display_cache  = today_cache if today_cache else prev_cache
+    display_date   = today_sw    if today_cache else prev_date
+
+    # ── Stale banner ─────────────────────────────────────────────────────────
+    if display_cache and display_date and display_date < today_sw:
+        st.warning(
+            f"⚠️ Showing results from **{display_date}**. "
+            f"Today's sweep hasn't run yet — auto-triggers at 8pm EST.",
+            icon="📅"
+        )
+
+    # ── Year status grid ──────────────────────────────────────────────────────
+    cols = st.columns(len(SWEEP_YEARS))
+    for i, yr in enumerate(SWEEP_YEARS):
+        with cols[i]:
+            if yr in today_cache:
+                sig = today_cache[yr].get("signal","?")
+                st.success(f"**{yr}**\n✅ {sig}")
+            elif yr in prev_cache:
+                sig = prev_cache[yr].get("signal","?")
+                st.warning(f"**{yr}**\n📅 {sig}")
+            else:
+                st.error(f"**{yr}**\n⏳ Not run")
+    st.caption("✅ today · 📅 previous day · ⏳ not run")
+    st.divider()
+
+    # ── Run button ────────────────────────────────────────────────────────────
+    missing_today = [yr for yr in SWEEP_YEARS if yr not in today_cache]
+    col_btn, col_info = st.columns([1, 3])
+    with col_btn:
+        sweep_btn = st.button(
+            "🚀 Run Consensus Sweep", type="primary",
+            use_container_width=True,
+            disabled=sweep_complete,
+            help="Triggers parallel GitHub Actions jobs for missing years"
+        )
+    with col_info:
+        if sweep_complete:
+            st.success(f"✅ Today's sweep complete ({today_str}) — all {len(SWEEP_YEARS)} years ready")
+        else:
+            st.info(
+                f"**{len(today_cache)}/{len(SWEEP_YEARS)}** years done today.  \n"
+                f"Will trigger **{len(missing_today)}** jobs: {', '.join(str(y) for y in missing_today)}"
+            )
+
+    if sweep_btn and missing_today:
+        sweep_str = ",".join(str(y) for y in missing_today)
+        with st.spinner(f"Triggering sweep for {sweep_str}..."):
+            ok = trigger_github_training(
+                start_year = missing_today[0],
+                wavelet    = wavelet_key,
+                tsl_pct    = tsl_pct,
+                z_reentry  = z_reentry,
+                fee_bps    = fee_bps,
+                sweep_mode = sweep_str,
+            )
+        if ok:
+            st.success(f"✅ Triggered {len(missing_today)} parallel jobs: {sweep_str}. Each takes ~90 mins.")
+        else:
+            st.error("❌ Failed to trigger GitHub Actions. Check GITHUB_TOKEN secret.")
+
+    if not display_cache:
+        st.info("👆 No sweep results yet. Click **🚀 Run Consensus Sweep** or wait for 8pm EST.")
+        st.stop()
+
+    consensus = _compute_consensus(display_cache)
+    if not consensus:
+        st.warning("Could not compute consensus.")
+        st.stop()
+
+    winner_sw  = consensus["winner"]
+    w_info     = consensus["etf_summary"][winner_sw]
+    win_color  = ETF_COLORS_SW.get(winner_sw, "#0066cc")
+    score_pct  = w_info["score_share"] * 100
+    split_sig  = w_info["score_share"] < 0.40
+    sig_label  = "⚠️ Split Signal" if split_sig else "✅ Clear Consensus"
+    date_note  = f"Results from: {display_date}"
+
+    # ── Winner banner ─────────────────────────────────────────────────────────
+    st.markdown(f"""
+    <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);
+                border:2px solid {win_color};border-radius:16px;
+                padding:32px;text-align:center;margin:16px 0;">
+      <div style="font-size:11px;letter-spacing:3px;color:#aaa;margin-bottom:8px;">
+        WEIGHTED CONSENSUS · DEEPWAVE · {len(display_cache)} START YEARS · {date_note}
+      </div>
+      <div style="font-size:72px;font-weight:900;color:{win_color};
+                  text-shadow:0 0 30px {win_color}88;">
+        {winner_sw}
+      </div>
+      <div style="font-size:14px;color:#ccc;margin-top:8px;">
+        {sig_label} · Score share {score_pct:.0f}% · {w_info['n_years']}/{len(SWEEP_YEARS)} years
+      </div>
+      <div style="display:flex;justify-content:center;gap:32px;margin-top:20px;flex-wrap:wrap;">
+        <div style="text-align:center;">
+          <div style="font-size:11px;color:#aaa;">Avg Return</div>
+          <div style="font-size:22px;font-weight:700;color:{'#00b894' if w_info['avg_return']>0 else '#d63031'};">
+            {w_info['avg_return']*100:.1f}%</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:11px;color:#aaa;">Avg Z</div>
+          <div style="font-size:22px;font-weight:700;color:#74b9ff;">{w_info['avg_z']:.2f}σ</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:11px;color:#aaa;">Avg Sharpe</div>
+          <div style="font-size:22px;font-weight:700;color:#a29bfe;">{w_info['avg_sharpe']:.2f}</div>
+        </div>
+        <div style="text-align:center;">
+          <div style="font-size:11px;color:#aaa;">Avg MaxDD</div>
+          <div style="font-size:22px;font-weight:700;color:#fd79a8;">{w_info['avg_max_dd']*100:.1f}%</div>
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Also-ranked
+    others = sorted([(e,v) for e,v in consensus["etf_summary"].items() if e != winner_sw],
+                    key=lambda x: -x[1]["cum_score"])
+    parts = [f'<span style="color:{ETF_COLORS_SW.get(e,"#888")};font-weight:600;">{e}</span> '
+             f'<span style="color:#aaa;">({v["cum_score"]:.2f})</span>' for e,v in others]
+    st.markdown('<div style="text-align:center;font-size:13px;margin-bottom:12px;">Also ranked: '
+                + ' &nbsp;|&nbsp; '.join(parts) + '</div>', unsafe_allow_html=True)
+    st.divider()
+
+    # ── Charts ────────────────────────────────────────────────────────────────
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Weighted Score per ETF**")
+        es = consensus["etf_summary"]
+        sorted_etfs = sorted(es.keys(), key=lambda e: -es[e]["cum_score"])
+        fig_bar = go.Figure(go.Bar(
+            x=sorted_etfs,
+            y=[es[e]["cum_score"] for e in sorted_etfs],
+            marker_color=[ETF_COLORS_SW.get(e,"#888") for e in sorted_etfs],
+            text=[f"{es[e]['n_years']}yr · {es[e]['score_share']*100:.0f}%"
+                  for e in sorted_etfs],
+            textposition="outside",
+        ))
+        fig_bar.update_layout(template="plotly_dark", height=360,
+                              yaxis_title="Cumulative Score", showlegend=False,
+                              margin=dict(t=20,b=20))
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    with c2:
+        st.markdown("**Z-Score Conviction by Start Year**")
+        per_year = consensus["per_year"]
+        fig_sc = go.Figure()
+        for row in per_year:
+            etf = row["signal"]
+            col = ETF_COLORS_SW.get(etf, "#888")
+            fig_sc.add_trace(go.Scatter(
+                x=[row["year"]], y=[row["z_score"]],
+                mode="markers+text",
+                marker=dict(size=18, color=col, line=dict(color="white",width=1)),
+                text=[etf], textposition="top center",
+                name=etf, showlegend=False,
+                hovertemplate=f"<b>{etf}</b><br>Year: {row['year']}<br>"
+                              f"Z: {row['z_score']:.2f}σ<br>"
+                              f"Return: {row['ann_return']*100:.1f}%<extra></extra>"
+            ))
+        fig_sc.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.3)")
+        fig_sc.update_layout(template="plotly_dark", height=360,
+                             xaxis_title="Start Year", yaxis_title="Z-Score (σ)",
+                             margin=dict(t=20,b=20))
+        st.plotly_chart(fig_sc, use_container_width=True)
+
+    # ── Per-year breakdown table ──────────────────────────────────────────────
+    st.subheader("📋 Full Per-Year Breakdown")
+    st.caption(f"40% Ann. Return + 20% Z-Score + 20% Sharpe + 20% (–MaxDD), min-max normalised · Results: {display_date}")
+
+    tbl_rows = []
+    for row in sorted(per_year, key=lambda r: r["year"]):
+        tbl_rows.append({
+            "Start Year":   row["year"],
+            "Signal":       row["signal"],
+            "Wtd Score":    round(row["wtd"], 3),
+            "Z-Score":      f"{row['z_score']:.2f}σ",
+            "Ann. Return":  f"{row['ann_return']*100:.2f}%",
+            "Sharpe":       f"{row['sharpe']:.2f}",
+            "Max Drawdown": f"{row['max_dd']*100:.2f}%",
+            "Date":         "✅ Today" if row["year"] in today_cache else f"📅 {display_date}",
+        })
+
+    tbl_df = pd.DataFrame(tbl_rows)
+
+    def _style_sig_sw(val):
+        c = ETF_COLORS_SW.get(val, "#888")
+        return f"background-color:{c}22;color:{c};font-weight:700;"
+
+    def _style_ret_sw(val):
+        try:
+            v = float(str(val).replace("%",""))
+            return "color:#00b894;font-weight:600" if v > 0 else "color:#d63031;font-weight:600"
+        except Exception:
+            return ""
+
+    st.dataframe(
+        tbl_df.style.applymap(_style_sig_sw, subset=["Signal"])
+                    .applymap(_style_ret_sw, subset=["Ann. Return"])
+                    .set_properties(**{"text-align":"center","font-size":"14px"})
+                    .hide(axis="index"),
+        use_container_width=True, height=280
+    )
