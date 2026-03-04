@@ -432,6 +432,51 @@ def run_evaluation(tsl_pct=config.DEFAULT_TSL_PCT,
     with open("evaluation_results.json","w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"\n  Saved → evaluation_results.json")
+
+    # ── Write date-stamped sweep cache if this is a sweep year ────────────────
+    SWEEP_YEARS = [2008, 2013, 2015, 2017, 2019, 2021]
+    start_yr = results.get("start_year") or (
+        results.get(winner, {}).get("start_year") if winner else None)
+    # Read from training_summary.json
+    if start_yr is None:
+        try:
+            import os as _os
+            summ_path = _os.path.join(config.MODELS_DIR, "training_summary.json")
+            if _os.path.exists(summ_path):
+                with open(summ_path) as _f:
+                    start_yr = json.load(_f).get("start_year")
+        except Exception:
+            pass
+    if start_yr in SWEEP_YEARS and winner and winner in results:
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        _date_tag = (_dt.now(_tz.utc) - _td(hours=5)).strftime("%Y%m%d")
+        w_metrics = results[winner].get("metrics", {})
+        # Get z_score from latest_prediction.json if available
+        _z = 0.0
+        try:
+            if _os.path.exists("latest_prediction.json"):
+                with open("latest_prediction.json") as _pf:
+                    _pred = json.load(_pf)
+                _preds = _pred.get("predictions", {})
+                _z = _preds.get(winner, {}).get("z_score", 0.0)
+        except Exception:
+            pass
+        sweep_payload = {
+            "signal":     results[winner].get("next_signal", "?"),
+            "ann_return": round(float(w_metrics.get("ann_return", 0)) / 100, 6),
+            "z_score":    round(float(_z), 4),
+            "sharpe":     round(float(w_metrics.get("sharpe", 0)), 4),
+            "max_dd":     round(float(w_metrics.get("max_drawdown", 0)) / 100, 6),
+            "winner_model": winner,
+            "start_year": start_yr,
+            "sweep_date": _date_tag,
+        }
+        import os as _os2
+        _os2.makedirs("sweep", exist_ok=True)
+        _sweep_fname = f"sweep/sweep_{start_yr}_{_date_tag}.json"
+        with open(_sweep_fname, "w") as _sf:
+            json.dump(sweep_payload, _sf, indent=2)
+        print(f"  Sweep cache saved → {_sweep_fname}")
     return results
 
 
