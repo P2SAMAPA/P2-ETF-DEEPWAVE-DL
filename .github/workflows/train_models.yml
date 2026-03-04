@@ -333,13 +333,27 @@ jobs:
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
       - run: python predict.py --tsl 10 --z 1.1
       - name: Push sweep to HF
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: |
-          python3 - <<'PYEOF'
+          # Fail fast if repo is unset
+          if [ -z "$HF_DATASET_REPO" ]; then
+            echo "ERROR: HF_DATASET_REPO secret is not set"; exit 1
+          fi
+          python3 - <<PYEOF
           import os, glob
           from huggingface_hub import HfApi, CommitOperationAdd
-          api = HfApi(); token = os.environ["HF_TOKEN"]; repo = os.environ["HF_DATASET_REPO"]
-          ops = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops: api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2008")
+          token = os.environ["HF_TOKEN"]
+          repo  = os.environ["HF_DATASET_REPO"]
+          print(f"Pushing to {repo}")
+          api   = HfApi()
+          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
+          if ops:
+              api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2008")
+              print(f"Pushed {len(ops)} file(s)")
+          else:
+              print("No sweep files found — check evaluate.py wrote them")
           PYEOF
 
   sweep_2013:
@@ -362,13 +376,27 @@ jobs:
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
       - run: python predict.py --tsl 10 --z 1.1
       - name: Push sweep to HF
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: |
-          python3 - <<'PYEOF'
+          # Fail fast if repo is unset
+          if [ -z "$HF_DATASET_REPO" ]; then
+            echo "ERROR: HF_DATASET_REPO secret is not set"; exit 1
+          fi
+          python3 - <<PYEOF
           import os, glob
           from huggingface_hub import HfApi, CommitOperationAdd
-          api = HfApi(); token = os.environ["HF_TOKEN"]; repo = os.environ["HF_DATASET_REPO"]
-          ops = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops: api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2013")
+          token = os.environ["HF_TOKEN"]
+          repo  = os.environ["HF_DATASET_REPO"]
+          print(f"Pushing to {repo}")
+          api   = HfApi()
+          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
+          if ops:
+              api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2013")
+              print(f"Pushed {len(ops)} file(s)")
+          else:
+              print("No sweep files found — check evaluate.py wrote them")
           PYEOF
 
   sweep_2015:
@@ -391,13 +419,27 @@ jobs:
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
       - run: python predict.py --tsl 10 --z 1.1
       - name: Push sweep to HF
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: |
-          python3 - <<'PYEOF'
+          # Fail fast if repo is unset
+          if [ -z "$HF_DATASET_REPO" ]; then
+            echo "ERROR: HF_DATASET_REPO secret is not set"; exit 1
+          fi
+          python3 - <<PYEOF
           import os, glob
           from huggingface_hub import HfApi, CommitOperationAdd
-          api = HfApi(); token = os.environ["HF_TOKEN"]; repo = os.environ["HF_DATASET_REPO"]
-          ops = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops: api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2015")
+          token = os.environ["HF_TOKEN"]
+          repo  = os.environ["HF_DATASET_REPO"]
+          print(f"Pushing to {repo}")
+          api   = HfApi()
+          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
+          if ops:
+              api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2015")
+              print(f"Pushed {len(ops)} file(s)")
+          else:
+              print("No sweep files found — check evaluate.py wrote them")
           PYEOF
 
   sweep_2017:
@@ -420,13 +462,27 @@ jobs:
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
       - run: python predict.py --tsl 10 --z 1.1
       - name: Push sweep to HF
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: |
-          python3 - <<'PYEOF'
+          # Fail fast if repo is unset
+          if [ -z "$HF_DATASET_REPO" ]; then
+            echo "ERROR: HF_DATASET_REPO secret is not set"; exit 1
+          fi
+          python3 - <<PYEOF
           import os, glob
           from huggingface_hub import HfApi, CommitOperationAdd
-          api = HfApi(); token = os.environ["HF_TOKEN"]; repo = os.environ["HF_DATASET_REPO"]
-          ops = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops: api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2017")
+          token = os.environ["HF_TOKEN"]
+          repo  = os.environ["HF_DATASET_REPO"]
+          print(f"Pushing to {repo}")
+          api   = HfApi()
+          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
+          if ops:
+              api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2017")
+              print(f"Pushed {len(ops)} file(s)")
+          else:
+              print("No sweep files found — check evaluate.py wrote them")
           PYEOF
 
   sweep_2019:
@@ -449,13 +505,27 @@ jobs:
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
       - run: python predict.py --tsl 10 --z 1.1
       - name: Push sweep to HF
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: |
-          python3 - <<'PYEOF'
+          # Fail fast if repo is unset
+          if [ -z "$HF_DATASET_REPO" ]; then
+            echo "ERROR: HF_DATASET_REPO secret is not set"; exit 1
+          fi
+          python3 - <<PYEOF
           import os, glob
           from huggingface_hub import HfApi, CommitOperationAdd
-          api = HfApi(); token = os.environ["HF_TOKEN"]; repo = os.environ["HF_DATASET_REPO"]
-          ops = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops: api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2019")
+          token = os.environ["HF_TOKEN"]
+          repo  = os.environ["HF_DATASET_REPO"]
+          print(f"Pushing to {repo}")
+          api   = HfApi()
+          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
+          if ops:
+              api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2019")
+              print(f"Pushed {len(ops)} file(s)")
+          else:
+              print("No sweep files found — check evaluate.py wrote them")
           PYEOF
 
   sweep_2021:
@@ -478,11 +548,25 @@ jobs:
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
       - run: python predict.py --tsl 10 --z 1.1
       - name: Push sweep to HF
+        env:
+          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
         run: |
-          python3 - <<'PYEOF'
+          # Fail fast if repo is unset
+          if [ -z "$HF_DATASET_REPO" ]; then
+            echo "ERROR: HF_DATASET_REPO secret is not set"; exit 1
+          fi
+          python3 - <<PYEOF
           import os, glob
           from huggingface_hub import HfApi, CommitOperationAdd
-          api = HfApi(); token = os.environ["HF_TOKEN"]; repo = os.environ["HF_DATASET_REPO"]
-          ops = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops: api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2021")
+          token = os.environ["HF_TOKEN"]
+          repo  = os.environ["HF_DATASET_REPO"]
+          print(f"Pushing to {repo}")
+          api   = HfApi()
+          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}", path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
+          if ops:
+              api.create_commit(repo_id=repo, repo_type="dataset", token=token, operations=ops, commit_message="Sweep 2021")
+              print(f"Pushed {len(ops)} file(s)")
+          else:
+              print("No sweep files found — check evaluate.py wrote them")
           PYEOF
