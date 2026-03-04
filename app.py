@@ -1134,28 +1134,32 @@ with tab2:
 
     # ── Run button ────────────────────────────────────────────────────────────
     missing_today = [yr for yr in SWEEP_YEARS if yr not in today_cache]
+    force_rerun   = st.checkbox("🔄 Force re-run all years", value=False,
+                                help="Re-trains even if today's results already exist")
+    trigger_years = SWEEP_YEARS if force_rerun else missing_today
+
     col_btn, col_info = st.columns([1, 3])
     with col_btn:
         sweep_btn = st.button(
             "🚀 Run Consensus Sweep", type="primary",
             use_container_width=True,
-            disabled=sweep_complete,
+            disabled=(sweep_complete and not force_rerun),
             help="Triggers parallel GitHub Actions jobs for missing years"
         )
     with col_info:
-        if sweep_complete:
+        if sweep_complete and not force_rerun:
             st.success(f"✅ Today's sweep complete ({today_str}) — all {len(SWEEP_YEARS)} years ready")
         else:
             st.info(
                 f"**{len(today_cache)}/{len(SWEEP_YEARS)}** years done today.  \n"
-                f"Will trigger **{len(missing_today)}** jobs: {', '.join(str(y) for y in missing_today)}"
+                f"Will trigger **{len(trigger_years)}** jobs: {', '.join(str(y) for y in trigger_years)}"
             )
 
-    if sweep_btn and missing_today:
-        sweep_str = ",".join(str(y) for y in missing_today)
+    if sweep_btn and trigger_years:
+        sweep_str = ",".join(str(y) for y in trigger_years)
         with st.spinner(f"Triggering sweep for {sweep_str}..."):
             ok = trigger_github_training(
-                start_year = missing_today[0],
+                start_year = trigger_years[0],
                 wavelet    = wavelet_key,
                 tsl_pct    = tsl_pct,
                 z_reentry  = z_reentry,
@@ -1163,7 +1167,7 @@ with tab2:
                 sweep_mode = sweep_str,
             )
         if ok:
-            st.success(f"✅ Triggered {len(missing_today)} parallel jobs: {sweep_str}. Each takes ~90 mins.")
+            st.success(f"✅ Triggered {len(trigger_years)} parallel jobs: {sweep_str}. Each takes ~90 mins.")
         else:
             st.error("❌ Failed to trigger GitHub Actions. Check GITHUB_TOKEN secret.")
 
