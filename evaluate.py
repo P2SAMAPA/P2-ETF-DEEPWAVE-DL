@@ -450,33 +450,45 @@ def run_evaluation(tsl_pct=config.DEFAULT_TSL_PCT,
     if start_yr in SWEEP_YEARS and winner and winner in results:
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         _date_tag = (_dt.now(_tz.utc) - _td(hours=5)).strftime("%Y%m%d")
-        w_metrics = results[winner].get("metrics", {})
-        # Get z_score from latest_prediction.json if available
+        w_metrics  = results[winner].get("metrics", {})
+
+        # Derive next signal from last row of audit_tail or all_signals
+        _next_signal = "?"
+        try:
+            _audit = results[winner].get("audit_tail") or results[winner].get("all_signals", [])
+            if _audit:
+                _last = _audit[-1]
+                _next_signal = _last.get("Signal_TSL") or _last.get("Signal") or "?"
+        except Exception:
+            pass
+
+        # Z-score from latest_prediction.json (written by predict.py before evaluate in workflow)
+        # Fall back to 0 if not available
         _z = 0.0
         try:
-            if _os.path.exists("latest_prediction.json"):
+            if os.path.exists("latest_prediction.json"):
                 with open("latest_prediction.json") as _pf:
                     _pred = json.load(_pf)
                 _preds = _pred.get("predictions", {})
-                _z = _preds.get(winner, {}).get("z_score", 0.0)
+                _z = float(_preds.get(winner, {}).get("z_score", 0.0) or 0.0)
         except Exception:
             pass
+
         sweep_payload = {
-            "signal":     results[winner].get("next_signal", "?"),
-            "ann_return": round(float(w_metrics.get("ann_return", 0)) / 100, 6),
-            "z_score":    round(float(_z), 4),
-            "sharpe":     round(float(w_metrics.get("sharpe", 0)), 4),
-            "max_dd":     round(float(w_metrics.get("max_drawdown", 0)) / 100, 6),
+            "signal":       _next_signal,
+            "ann_return":   round(float(w_metrics.get("ann_return", 0)) / 100, 6),
+            "z_score":      round(_z, 4),
+            "sharpe":       round(float(w_metrics.get("sharpe", 0)), 4),
+            "max_dd":       round(float(w_metrics.get("max_drawdown", 0)) / 100, 6),
             "winner_model": winner,
-            "start_year": start_yr,
-            "sweep_date": _date_tag,
+            "start_year":   start_yr,
+            "sweep_date":   _date_tag,
         }
-        import os as _os2
-        _os2.makedirs("sweep", exist_ok=True)
+        os.makedirs("sweep", exist_ok=True)
         _sweep_fname = f"sweep/sweep_{start_yr}_{_date_tag}.json"
         with open(_sweep_fname, "w") as _sf:
             json.dump(sweep_payload, _sf, indent=2)
-        print(f"  Sweep cache saved → {_sweep_fname}")
+        print(f"  Sweep cache saved → {_sweep_fname}  signal={_next_signal}  z={_z:.3f}")
     return results
 
 
