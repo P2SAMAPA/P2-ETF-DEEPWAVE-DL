@@ -1,47 +1,47 @@
 {
-  "as_of_date": "2026-03-06",
+  "as_of_date": "2026-03-09",
   "winner_model": "model_b",
   "final_signal": "GLD",
-  "final_confidence": 0.2947,
+  "final_confidence": 0.2945,
   "tsl_status": {
     "two_day_cumul_pct": -0.31,
     "tsl_triggered": false,
     "in_cash": false,
-    "current_z": 1.448,
+    "current_z": 1.446,
     "z_reentry": 1.1,
-    "tsl_pct": 10.0
+    "tsl_pct": 10
   },
-  "tbill_rate": 3.6,
+  "tbill_rate": 3.59,
   "predictions": {
     "model_a": {
       "model": "model_a",
       "lookback": 30,
       "signal": "TLT",
       "confidence": 0.1548,
-      "z_score": 1.477,
+      "z_score": 1.456,
       "probabilities": {
         "TLT": 0.1548,
-        "VCIT": 0.1427,
-        "LQD": 0.1412,
-        "HYG": 0.1343,
-        "VNQ": 0.1298,
+        "VCIT": 0.1431,
+        "LQD": 0.141,
+        "HYG": 0.1344,
+        "VNQ": 0.1293,
         "GLD": 0.1498,
-        "SLV": 0.1474
+        "SLV": 0.1476
       }
     },
     "model_b": {
       "model": "model_b",
       "lookback": 60,
       "signal": "GLD",
-      "confidence": 0.2947,
-      "z_score": 1.448,
+      "confidence": 0.2945,
+      "z_score": 1.446,
       "probabilities": {
-        "TLT": 0.1092,
-        "VCIT": 0.0091,
+        "TLT": 0.1085,
+        "VCIT": 0.0089,
         "LQD": 0.0026,
-        "HYG": 0.1499,
-        "VNQ": 0.1718,
-        "GLD": 0.2947,
+        "HYG": 0.1517,
+        "VNQ": 0.171,
+        "GLD": 0.2945,
         "SLV": 0.2627
       }
     },
@@ -49,16 +49,16 @@
       "model": "model_c",
       "lookback": 60,
       "signal": "VNQ",
-      "confidence": 0.2002,
-      "z_score": 1.446,
+      "confidence": 0.2005,
+      "z_score": 1.454,
       "probabilities": {
-        "TLT": 0.191,
-        "VCIT": 0.0866,
-        "LQD": 0.1045,
-        "HYG": 0.1192,
-        "VNQ": 0.2002,
-        "GLD": 0.1569,
-        "SLV": 0.1415
+        "TLT": 0.1911,
+        "VCIT": 0.0865,
+        "LQD": 0.1042,
+        "HYG": 0.1208,
+        "VNQ": 0.2005,
+        "GLD": 0.1566,
+        "SLV": 0.1404
       }
     }
   },
