@@ -1,68 +1,68 @@
 {
   "as_of_date": "2026-03-11",
   "winner_model": "model_c",
-  "final_signal": "SLV",
-  "final_confidence": 0.2493,
+  "final_signal": "VNQ",
+  "final_confidence": 0.244,
   "tsl_status": {
     "two_day_cumul_pct": 5.23,
     "tsl_triggered": false,
     "in_cash": false,
-    "current_z": 2.156,
+    "current_z": 1.018,
     "z_reentry": 1.1,
-    "tsl_pct": 10
+    "tsl_pct": 10.0
   },
   "tbill_rate": 3.61,
   "predictions": {
     "model_a": {
       "model": "model_a",
-      "lookback": 60,
-      "signal": "LQD",
-      "confidence": 0.1579,
-      "z_score": 0.942,
+      "lookback": 30,
+      "signal": "GLD",
+      "confidence": 0.2462,
+      "z_score": 1.427,
       "probabilities": {
-        "TLT": 0.1307,
-        "VCIT": 0.1548,
-        "LQD": 0.1579,
-        "HYG": 0.1139,
-        "VNQ": 0.1572,
-        "GLD": 0.1321,
-        "SLV": 0.1534
+        "TLT": 0.1432,
+        "VCIT": 0.1419,
+        "LQD": 0.0053,
+        "HYG": 0.1376,
+        "VNQ": 0.2188,
+        "GLD": 0.2462,
+        "SLV": 0.107
       }
     },
     "model_b": {
       "model": "model_b",
-      "lookback": 45,
-      "signal": "VNQ",
-      "confidence": 0.1629,
-      "z_score": 1.284,
+      "lookback": 60,
+      "signal": "SLV",
+      "confidence": 0.1639,
+      "z_score": 1.404,
       "probabilities": {
-        "TLT": 0.1622,
-        "VCIT": 0.1466,
-        "LQD": 0.1464,
-        "HYG": 0.1176,
-        "VNQ": 0.1629,
-        "GLD": 0.1279,
-        "SLV": 0.1364
+        "TLT": 0.1316,
+        "VCIT": 0.1538,
+        "LQD": 0.1254,
+        "HYG": 0.1265,
+        "VNQ": 0.1601,
+        "GLD": 0.1386,
+        "SLV": 0.1639
       }
     },
     "model_c": {
       "model": "model_c",
-      "lookback": 30,
-      "signal": "SLV",
-      "confidence": 0.2493,
-      "z_score": 2.156,
+      "lookback": 45,
+      "signal": "VNQ",
+      "confidence": 0.244,
+      "z_score": 1.018,
       "probabilities": {
-        "TLT": 0.1292,
-        "VCIT": 0.102,
-        "LQD": 0.107,
-        "HYG": 0.0976,
-        "VNQ": 0.1653,
-        "GLD": 0.1495,
-        "SLV": 0.2493
+        "TLT": 0.1769,
+        "VCIT": 0.0022,
+        "LQD": 0.0002,
+        "HYG": 0.1094,
+        "VNQ": 0.244,
+        "GLD": 0.2337,
+        "SLV": 0.2334
       }
     }
   },
   "trained_from_year": 2008,
   "trained_wavelet": "db4",
-  "trained_at": "2026-03-10T04:15:44.105951"
+  "trained_at": "2026-03-10T23:01:22.441079"
 }
