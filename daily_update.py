@@ -8,6 +8,7 @@
 
 import os
 import sys
+import shutil
 from datetime import datetime
 
 from huggingface_hub import HfApi, hf_hub_download, CommitOperationAdd
@@ -38,16 +39,17 @@ def download_existing_data():
 
     print(f"Downloading {len(parquet_files)} parquet files from HF...")
     for remote_path in parquet_files:
+        local_filename = os.path.basename(remote_path)          # e.g., "bench_price.parquet"
+        local_path = os.path.join(config.DATA_DIR, local_filename)
         try:
-            hf_hub_download(
+            downloaded_path = hf_hub_download(
                 repo_id=repo_id,
                 filename=remote_path,
                 repo_type=repo_type,
                 token=config.HF_TOKEN,
-                local_dir=config.DATA_DIR,
-                local_dir_use_symlinks=False,
             )
-            print(f"  Downloaded {remote_path}")
+            shutil.copy2(downloaded_path, local_path)
+            print(f"  Downloaded {remote_path} -> {local_path}")
         except Exception as e:
             print(f"  Failed to download {remote_path}: {e}")
 
@@ -81,7 +83,6 @@ def ensure_sorted_and_log(data_dict):
     for key, df in data_dict.items():
         if df.index.name != "Date":
             df.index.name = "Date"
-        # Force sort ascending
         df.sort_index(inplace=True)
         print(f"\n[{key}]")
         print(f"  Rows: {len(df)}")
