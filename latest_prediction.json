@@ -1,5 +1,5 @@
 {
-  "as_of_date": "2026-03-18",
+  "as_of_date": "2026-03-19",
   "winner_model": "model_b",
   "final_signal": "VCIT",
   "final_confidence": 0.3811,
@@ -9,7 +9,7 @@
     "in_cash": false,
     "current_z": 2.27,
     "z_reentry": 1.1,
-    "tsl_pct": 10.0
+    "tsl_pct": 10
   },
   "tbill_rate": 3.61,
   "predictions": {
