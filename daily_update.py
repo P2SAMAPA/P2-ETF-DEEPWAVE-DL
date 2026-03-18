@@ -9,7 +9,6 @@
 import os
 import sys
 from datetime import datetime
-from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download, CommitOperationAdd
 
@@ -24,7 +23,6 @@ def download_existing_data():
     repo_id = config.HF_DATASET_REPO
     repo_type = "dataset"
 
-    # Ensure local data directory exists
     os.makedirs(config.DATA_DIR, exist_ok=True)
 
     try:
@@ -46,8 +44,8 @@ def download_existing_data():
                 filename=remote_path,
                 repo_type=repo_type,
                 token=config.HF_TOKEN,
-                local_dir=config.DATA_DIR,          # saves directly into data/
-                local_dir_use_symlinks=False,       # ensures actual file copy
+                local_dir=config.DATA_DIR,
+                local_dir_use_symlinks=False,
             )
             print(f"  Downloaded {remote_path}")
         except Exception as e:
@@ -78,6 +76,21 @@ def upload_files(local_paths, repo_paths, commit_msg):
     print(f"Uploaded {len(operations)} file(s).")
 
 
+def ensure_sorted_and_log(data_dict):
+    """Ensure each DataFrame is sorted ascending by index, and print summary."""
+    for key, df in data_dict.items():
+        if df.index.name != "Date":
+            df.index.name = "Date"
+        # Force sort ascending
+        df.sort_index(inplace=True)
+        print(f"\n[{key}]")
+        print(f"  Rows: {len(df)}")
+        print(f"  Date range: {df.index.min()} to {df.index.max()}")
+        print(f"  First 3 dates: {df.index[:3].tolist()}")
+        print(f"  Last 3 dates: {df.index[-3:].tolist()}")
+    return data_dict
+
+
 def main():
     print(f"\n{'='*60}")
     print(f"  Daily Update — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
@@ -87,12 +100,16 @@ def main():
     print("\n[0/4] Downloading existing dataset from Hugging Face...")
     download_existing_data()
 
-    # 1. Pull new data
+    # 1. Pull new data (incremental)
     print("\n[1/4] Incremental data download...")
     data = incremental_update()
     if not data:
         print("  No new data. Exiting.")
         sys.exit(0)
+
+    # Ensure all DataFrames are sorted ascending and log their stats
+    print("\n--- Verifying data after incremental update ---")
+    data = ensure_sorted_and_log(data)
 
     # 2. Push updated data to HF
     print("\n[2/4] Pushing data to Hugging Face...")
@@ -118,7 +135,7 @@ def main():
 
     print(f"\n  Daily update complete.")
     print(f"  Final signal: {result.get('final_signal', '—')}")
-    print(f"{'='=}")
+    print(f"{'='*60}")
 
 
 if __name__ == "__main__":
