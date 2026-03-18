@@ -9,7 +9,7 @@
     "in_cash": false,
     "current_z": 1.08,
     "z_reentry": 1.1,
-    "tsl_pct": 10.0
+    "tsl_pct": 10
   },
   "tbill_rate": 3.61,
   "predictions": {
