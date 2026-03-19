@@ -1,5 +1,5 @@
 {
-  "as_of_date": "2026-03-19",
+  "as_of_date": "2026-03-20",
   "winner_model": "model_c",
   "final_signal": "VNQ",
   "final_confidence": 0.1761,
@@ -9,7 +9,7 @@
     "in_cash": false,
     "current_z": 1.296,
     "z_reentry": 1.1,
-    "tsl_pct": 10.0
+    "tsl_pct": 10
   },
   "tbill_rate": NaN,
   "predictions": {
