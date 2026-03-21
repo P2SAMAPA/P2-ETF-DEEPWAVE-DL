@@ -110,41 +110,43 @@ DATASETS = [
 def save_all(data):
     for name, df in data.items():
         path = os.path.join(config.DATA_DIR, f"{name}.parquet")
-        
+
         # Create a copy to avoid modifying the original dataframe in memory
         df_save = df.copy()
-        
-        # FIX: Reset index to make 'Date' a column.
-        # This ensures Parquet saves it as a column, preventing HF from 
-        # reading it as an integer index.
+
+        # Reset index to make 'Date' a column so Parquet saves it as a column,
+        # preventing HF from reading it as an integer index.
         if df_save.index.name == "Date" or df_save.index.name is None:
             df_save = df_save.reset_index()
-        
-        # Ensure 'Date' column exists and is properly formatted
+
         if 'Date' in df_save.columns:
-            # Convert to datetime (handles cases where it might be int or string)
+            # Ensure datetime, then strip timezone
             df_save['Date'] = pd.to_datetime(df_save['Date'])
-            
-            # Remove timezone information to ensure clean UTC-naive storage
             if df_save['Date'].dt.tz is not None:
                 df_save['Date'] = df_save['Date'].dt.tz_localize(None)
+
+            # FIX: Convert to Python date objects so pyarrow stores as date32,
+            # not timestamp[ns] (int64). This prevents HF from showing raw
+            # Unix millisecond timestamps in the Date column.
+            df_save['Date'] = df_save['Date'].dt.date
         else:
             print(f"Warning: 'Date' column not found in {name} for saving.")
 
         # Save with index=False since Date is now a column
-        df_save.to_parquet(path, index=False)
+        df_save.to_parquet(path, index=False, engine='pyarrow')
         print(f"Saved {name}.parquet ({len(df_save)} rows)")
 
 
 def _ensure_datetime_index(df):
     """Ensure the DataFrame has a proper DatetimeIndex named 'Date'.
-       Handles loading from old Parquet files that might have Date as a column or int index.
+    Handles loading from Parquet files where Date may be a date32 column,
+    a datetime column, or (legacy) an int64 Unix timestamp index.
     """
-    
+
     # 1. Flatten MultiIndex columns if present (common in older files or yfinance artifacts)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = ['_'.join(str(c) for c in col if c != '').strip() for col in df.columns.values]
-    
+
     # 2. Check if 'Date' is in columns (case-insensitive search)
     date_col = None
     for c in df.columns:
@@ -157,32 +159,32 @@ def _ensure_datetime_index(df):
             if flat_c.lower() == 'date':
                 date_col = c
                 break
-    
+
     if date_col:
-        # Convert column to datetime
+        # pd.to_datetime handles datetime64, date32 (Python date objects), and strings
         df[date_col] = pd.to_datetime(df[date_col])
         df = df.set_index(date_col)
         df.index.name = "Date"
     else:
         # 3. If Date is not in columns, check the index
         if df.index.name is None:
-             df.index.name = "Date" # Assume the index is the date
+            df.index.name = "Date"  # Assume the index is the date
 
-        # Convert Unix timestamp (ms) to datetime if read as int
+        # Convert Unix timestamp (ms) to datetime if read as int (legacy files)
         if df.index.dtype == 'int64' or str(df.index.dtype).startswith('int'):
             if df.index.max() > 1e12:  # milliseconds
                 df.index = pd.to_datetime(df.index, unit='ms')
             else:  # seconds
                 df.index = pd.to_datetime(df.index, unit='s')
-        
+
         # Ensure it is actually datetime
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
-    
+
     # 4. Clean up timezone info
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
-        
+
     df.index.name = "Date"
     return df
 
@@ -193,7 +195,6 @@ def load_prices_only():
         path = os.path.join(config.DATA_DIR, f"{name}.parquet")
         if os.path.exists(path):
             df = pd.read_parquet(path)
-            # Fix: ensure index is proper datetime
             df = _ensure_datetime_index(df)
             data[name] = df
     return data
@@ -209,7 +210,6 @@ def load_local():
     if not os.path.exists(config.DATA_DIR):
         return None
 
-    # Load all defined datasets
     for name in DATASETS:
         path = os.path.join(config.DATA_DIR, f"{name}.parquet")
         if os.path.exists(path):
@@ -219,11 +219,11 @@ def load_local():
                 data[name] = df
             except Exception as e:
                 print(f"Warning: Could not load {name}: {e}")
-    
+
     # If no data was loaded, return None to trigger download logic in predict.py
     if not data:
         return None
-        
+
     return data
 
 
