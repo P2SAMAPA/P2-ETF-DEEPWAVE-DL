@@ -56,6 +56,7 @@ def download_existing_data():
                 filename=remote_path,
                 repo_type="dataset",
                 token=config.HF_TOKEN,
+                force_download=True,  # Always pull fresh from HF, never use cache
             )
             shutil.copy2(downloaded_path, local_path)
             print(f"  ✓ {remote_path}")
