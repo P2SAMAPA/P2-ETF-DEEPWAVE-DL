@@ -1,5 +1,9 @@
 # data_download.py
 # Unified, deterministic dataset builder.
+# Seed and incremental modes both:
+#   - Update prices
+#   - ALWAYS recompute returns & volatility
+#   - ALWAYS overwrite all parquet files
 
 import argparse
 import os
@@ -17,6 +21,10 @@ import config
 warnings.filterwarnings("ignore")
 os.makedirs(config.DATA_DIR, exist_ok=True)
 
+
+# ─────────────────────────────────────────────────────────────
+# PRICE FETCHING
+# ─────────────────────────────────────────────────────────────
 
 def fetch_prices(tickers, start, end):
     print(f"Fetching prices {start} -> {end}")
@@ -43,6 +51,10 @@ def fetch_prices(tickers, start, end):
     return prices.sort_index()
 
 
+# ─────────────────────────────────────────────────────────────
+# DERIVED DATA
+# ─────────────────────────────────────────────────────────────
+
 def compute_returns(prices):
     returns = np.log(prices / prices.shift(1)).dropna()
     returns.index.name = "Date"
@@ -55,6 +67,10 @@ def compute_volatility(returns):
     vol.index.name = "Date"
     return vol
 
+
+# ─────────────────────────────────────────────────────────────
+# MACRO
+# ─────────────────────────────────────────────────────────────
 
 def fetch_macro(start, end):
     fred = Fred(api_key=config.FRED_API_KEY)
@@ -76,6 +92,21 @@ def fetch_macro(start, end):
     return macro.sort_index().ffill()
 
 
+# ─────────────────────────────────────────────────────────────
+# SAVE / LOAD
+# ─────────────────────────────────────────────────────────────
+
+DATASETS = [
+    "etf_price",
+    "etf_ret",
+    "etf_vol",
+    "bench_price",
+    "bench_ret",
+    "bench_vol",
+    "macro",
+]
+
+
 def save_all(data):
     for name, df in data.items():
         path = os.path.join(config.DATA_DIR, f"{name}.parquet")
@@ -89,12 +120,40 @@ def load_prices_only():
         path = os.path.join(config.DATA_DIR, f"{name}.parquet")
         if os.path.exists(path):
             df = pd.read_parquet(path)
-            if df.index.tz is not None:
-                df.index = df.index.tz_localize(None)
-            df.index.name = "Date"
+            # Fix: ensure index is proper datetime
+            df = _ensure_datetime_index(df)
             data[name] = df
     return data
 
+
+def _ensure_datetime_index(df):
+    """Ensure the DataFrame index is a proper datetime index."""
+    if df.index.name is None:
+        df.index.name = "Date"
+    
+    # Check if index needs conversion from timestamps
+    if df.index.dtype == 'int64' or str(df.index.dtype).startswith('int'):
+        # Convert Unix timestamp (ms) to datetime
+        if df.index.max() > 1e12:  # milliseconds
+            df.index = pd.to_datetime(df.index, unit='ms')
+        else:  # seconds
+            df.index = pd.to_datetime(df.index, unit='s')
+    
+    # Ensure index is datetime
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    
+    # Ensure timezone naive
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    
+    df.index.name = "Date"
+    return df
+
+
+# ─────────────────────────────────────────────────────────────
+# FULL REBUILD LOGIC
+# ─────────────────────────────────────────────────────────────
 
 def build_full_dataset(start, end):
     print(f"\nBuilding dataset: {start} -> {end}")
@@ -127,13 +186,12 @@ def incremental_update():
         new_etf = fetch_prices(config.ETFS, start, end)
         new_bench = fetch_prices(config.BENCHMARKS, start, end)
 
-        etf_price = prices_existing["etf_price"].iloc[:-1]._append(new_etf)
-        bench_price = prices_existing["bench_price"].iloc[:-1]._append(new_bench)
+        # Concatenate and drop duplicates
+        etf_price = pd.concat([prices_existing["etf_price"], new_etf])
+        bench_price = pd.concat([prices_existing["bench_price"], new_bench])
 
         etf_price = etf_price[~etf_price.index.duplicated(keep="last")]
         bench_price = bench_price[~bench_price.index.duplicated(keep="last")]
-        etf_price.index.name = "Date"
-        bench_price.index.name = "Date"
     else:
         etf_price = prices_existing["etf_price"]
         bench_price = prices_existing["bench_price"]
