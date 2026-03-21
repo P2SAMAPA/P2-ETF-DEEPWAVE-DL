@@ -18,9 +18,24 @@ os.makedirs(config.MODELS_DIR, exist_ok=True)
 # ─── Column normalisation ─────────────────────────────────────────────────────
 
 def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Flatten MultiIndex columns and clean up stringified tuple column names."""
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [col[1] if col[1] else col[0] for col in df.columns]
-    df.columns = [str(c).strip() for c in df.columns]
+
+    cleaned = []
+    for c in df.columns:
+        c = str(c).strip()
+        # Handle stringified tuples like "('TLT', 'TLT')" or "('Date', '')"
+        if c.startswith("('") and c.endswith("')"):
+            try:
+                parts = c.strip("()").replace("'", "").split(", ")
+                # Use the non-empty part, preferring the second element (ticker)
+                c = parts[1] if len(parts) > 1 and parts[1] else parts[0]
+            except Exception:
+                pass
+        cleaned.append(c.strip())
+
+    df.columns = cleaned
     return df
 
 
