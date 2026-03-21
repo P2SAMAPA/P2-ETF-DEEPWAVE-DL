@@ -137,16 +137,37 @@ def save_all(data):
 
 
 def _ensure_datetime_index(df):
-    """Ensure the DataFrame has a proper DatetimeIndex named 'Date'."""
+    """Ensure the DataFrame has a proper DatetimeIndex named 'Date'.
+       Handles loading from old Parquet files that might have Date as a column or int index.
+    """
     
-    # 1. If 'Date' is a column (likely from the new save format), set it as index
-    if 'Date' in df.columns:
-        # Convert to datetime if needed
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.set_index('Date')
+    # 1. Flatten MultiIndex columns if present (common in older files or yfinance artifacts)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ['_'.join(str(c) for c in col if c != '').strip() for col in df.columns.values]
+    
+    # 2. Check if 'Date' is in columns (case-insensitive search)
+    date_col = None
+    for c in df.columns:
+        if isinstance(c, str) and c.lower() == 'date':
+            date_col = c
+            break
+        # Handle tuple column names if flattening wasn't perfect
+        if isinstance(c, tuple):
+            flat_c = '_'.join(str(x) for x in c if x)
+            if flat_c.lower() == 'date':
+                date_col = c
+                break
+    
+    if date_col:
+        # Convert column to datetime
+        df[date_col] = pd.to_datetime(df[date_col])
+        df = df.set_index(date_col)
+        df.index.name = "Date"
+    else:
+        # 3. If Date is not in columns, check the index
+        if df.index.name is None:
+             df.index.name = "Date" # Assume the index is the date
 
-    # 2. If index is 'Date', check its type
-    if df.index.name == 'Date':
         # Convert Unix timestamp (ms) to datetime if read as int
         if df.index.dtype == 'int64' or str(df.index.dtype).startswith('int'):
             if df.index.max() > 1e12:  # milliseconds
@@ -157,11 +178,11 @@ def _ensure_datetime_index(df):
         # Ensure it is actually datetime
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
+    
+    # 4. Clean up timezone info
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
         
-        # Strip timezone if present
-        if df.index.tz is not None:
-            df.index = df.index.tz_localize(None)
-            
     df.index.name = "Date"
     return df
 
