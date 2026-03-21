@@ -120,15 +120,10 @@ def save_all(data):
             df_save = df_save.reset_index()
 
         if 'Date' in df_save.columns:
-            # Ensure datetime, then strip timezone
+            # Ensure datetime, strip timezone
             df_save['Date'] = pd.to_datetime(df_save['Date'])
             if df_save['Date'].dt.tz is not None:
                 df_save['Date'] = df_save['Date'].dt.tz_localize(None)
-
-            # FIX: Convert to Python date objects so pyarrow stores as date32,
-            # not timestamp[ns] (int64). This prevents HF from showing raw
-            # Unix millisecond timestamps in the Date column.
-            df_save['Date'] = df_save['Date'].dt.date
         else:
             print(f"Warning: 'Date' column not found in {name} for saving.")
 
@@ -139,8 +134,8 @@ def save_all(data):
 
 def _ensure_datetime_index(df):
     """Ensure the DataFrame has a proper DatetimeIndex named 'Date'.
-    Handles loading from Parquet files where Date may be a date32 column,
-    a datetime column, or (legacy) an int64 Unix timestamp index.
+    Handles loading from Parquet files where Date may be a datetime column,
+    a date32 column, or (legacy) an int64 Unix timestamp index.
     """
 
     # 1. Flatten MultiIndex columns if present (common in older files or yfinance artifacts)
@@ -269,6 +264,7 @@ def incremental_update():
         etf_price = etf_price[~etf_price.index.duplicated(keep="last")]
         bench_price = bench_price[~bench_price.index.duplicated(keep="last")]
     else:
+        print("Prices already up to date.")
         etf_price = prices_existing["etf_price"]
         bench_price = prices_existing["bench_price"]
 
