@@ -136,18 +136,6 @@ def save_all(data):
         print(f"Saved {name}.parquet ({len(df_save)} rows)")
 
 
-def load_prices_only():
-    data = {}
-    for name in ["etf_price", "bench_price"]:
-        path = os.path.join(config.DATA_DIR, f"{name}.parquet")
-        if os.path.exists(path):
-            df = pd.read_parquet(path)
-            # Fix: ensure index is proper datetime
-            df = _ensure_datetime_index(df)
-            data[name] = df
-    return data
-
-
 def _ensure_datetime_index(df):
     """Ensure the DataFrame has a proper DatetimeIndex named 'Date'."""
     
@@ -176,6 +164,46 @@ def _ensure_datetime_index(df):
             
     df.index.name = "Date"
     return df
+
+
+def load_prices_only():
+    data = {}
+    for name in ["etf_price", "bench_price"]:
+        path = os.path.join(config.DATA_DIR, f"{name}.parquet")
+        if os.path.exists(path):
+            df = pd.read_parquet(path)
+            # Fix: ensure index is proper datetime
+            df = _ensure_datetime_index(df)
+            data[name] = df
+    return data
+
+
+def load_local():
+    """
+    Loads all available dataset parquet files into a dictionary.
+    Used by predict.py to load data for inference.
+    Returns None if no data is found.
+    """
+    data = {}
+    if not os.path.exists(config.DATA_DIR):
+        return None
+
+    # Load all defined datasets
+    for name in DATASETS:
+        path = os.path.join(config.DATA_DIR, f"{name}.parquet")
+        if os.path.exists(path):
+            try:
+                df = pd.read_parquet(path)
+                df = _ensure_datetime_index(df)
+                data[name] = df
+            except Exception as e:
+                print(f"Warning: Could not load {name}: {e}")
+    
+    # If no data was loaded, return None to trigger download logic in predict.py
+    if not data:
+        return None
+        
+    return data
 
 
 # ─────────────────────────────────────────────────────────────
