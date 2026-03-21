@@ -35,6 +35,12 @@ def fetch_prices(tickers, start, end):
             df = yf.download(ticker, start=start, end=end, auto_adjust=True, progress=False)
             if df.empty:
                 continue
+
+            # Flatten MultiIndex columns returned by newer yfinance versions
+            # e.g. ('Close', 'TLT') or ('Close', '') -> use ticker name directly
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [col[0] for col in df.columns]
+
             close = df[["Close"]].rename(columns={"Close": ticker})
             frames.append(close)
         except Exception as e:
@@ -44,6 +50,14 @@ def fetch_prices(tickers, start, end):
         raise RuntimeError("No price data fetched.")
 
     prices = pd.concat(frames, axis=1)
+
+    # Flatten MultiIndex columns if concat produced one
+    if isinstance(prices.columns, pd.MultiIndex):
+        prices.columns = [col[0] if col[0] != '' else col[1] for col in prices.columns]
+
+    # Ensure all column names are clean strings (not tuples or stringified tuples)
+    prices.columns = [str(c).strip() for c in prices.columns]
+
     prices.index = pd.to_datetime(prices.index)
     if prices.index.tz is not None:
         prices.index = prices.index.tz_localize(None)
@@ -113,6 +127,11 @@ def save_all(data):
 
         # Create a copy to avoid modifying the original dataframe in memory
         df_save = df.copy()
+
+        # Flatten MultiIndex columns before saving
+        if isinstance(df_save.columns, pd.MultiIndex):
+            df_save.columns = [col[0] if col[0] != '' else col[1] for col in df_save.columns]
+        df_save.columns = [str(c).strip() for c in df_save.columns]
 
         # Reset index to make 'Date' a column so Parquet saves it as a column,
         # preventing HF from reading it as an integer index.
