@@ -181,6 +181,25 @@ def _ensure_datetime_index(df):
         df.index = df.index.tz_localize(None)
 
     df.index.name = "Date"
+
+    # 5. Drop any residual date-like columns that leaked in (e.g. from double reset_index)
+    for col in list(df.columns):
+        if isinstance(col, str) and col.lower() in ('date', 'index', 'level_0'):
+            df = df.drop(columns=[col])
+
+    return df
+
+
+def _clean_price_df(df):
+    """After loading, ensure all columns are numeric and no date columns remain."""
+    # Drop any residual date/index columns
+    for col in list(df.columns):
+        if isinstance(col, str) and col.lower() in ('date', 'index', 'level_0'):
+            df = df.drop(columns=[col])
+
+    # Coerce all remaining columns to numeric, dropping any that fail entirely
+    df = df.apply(pd.to_numeric, errors='coerce')
+
     return df
 
 
@@ -191,6 +210,8 @@ def load_prices_only():
         if os.path.exists(path):
             df = pd.read_parquet(path)
             df = _ensure_datetime_index(df)
+            df = _clean_price_df(df)
+            print(f"Loaded {name}: {len(df)} rows, last date = {df.index.max()}")
             data[name] = df
     return data
 
@@ -211,6 +232,10 @@ def load_local():
             try:
                 df = pd.read_parquet(path)
                 df = _ensure_datetime_index(df)
+                # Drop any residual date/index columns
+                for col in list(df.columns):
+                    if isinstance(col, str) and col.lower() in ('date', 'index', 'level_0'):
+                        df = df.drop(columns=[col])
                 data[name] = df
             except Exception as e:
                 print(f"Warning: Could not load {name}: {e}")
