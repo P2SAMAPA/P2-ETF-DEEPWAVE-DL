@@ -34,4 +34,4 @@ jobs:
         run: python data_upload_hf.py
 
       - name: Confirm upload
-        run: echo "✅ Seed complete. Data uploaded to HF."
+        run: echo "Seed complete. Data uploaded to HF."
