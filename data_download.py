@@ -110,8 +110,30 @@ DATASETS = [
 def save_all(data):
     for name, df in data.items():
         path = os.path.join(config.DATA_DIR, f"{name}.parquet")
-        df.to_parquet(path)
-        print(f"Saved {name}.parquet ({len(df)} rows)")
+        
+        # Create a copy to avoid modifying the original dataframe in memory
+        df_save = df.copy()
+        
+        # FIX: Reset index to make 'Date' a column.
+        # This ensures Parquet saves it as a column, preventing HF from 
+        # reading it as an integer index.
+        if df_save.index.name == "Date" or df_save.index.name is None:
+            df_save = df_save.reset_index()
+        
+        # Ensure 'Date' column exists and is properly formatted
+        if 'Date' in df_save.columns:
+            # Convert to datetime (handles cases where it might be int or string)
+            df_save['Date'] = pd.to_datetime(df_save['Date'])
+            
+            # Remove timezone information to ensure clean UTC-naive storage
+            if df_save['Date'].dt.tz is not None:
+                df_save['Date'] = df_save['Date'].dt.tz_localize(None)
+        else:
+            print(f"Warning: 'Date' column not found in {name} for saving.")
+
+        # Save with index=False since Date is now a column
+        df_save.to_parquet(path, index=False)
+        print(f"Saved {name}.parquet ({len(df_save)} rows)")
 
 
 def load_prices_only():
@@ -127,26 +149,31 @@ def load_prices_only():
 
 
 def _ensure_datetime_index(df):
-    """Ensure the DataFrame index is a proper datetime index."""
-    if df.index.name is None:
-        df.index.name = "Date"
+    """Ensure the DataFrame has a proper DatetimeIndex named 'Date'."""
     
-    # Check if index needs conversion from timestamps
-    if df.index.dtype == 'int64' or str(df.index.dtype).startswith('int'):
-        # Convert Unix timestamp (ms) to datetime
-        if df.index.max() > 1e12:  # milliseconds
-            df.index = pd.to_datetime(df.index, unit='ms')
-        else:  # seconds
-            df.index = pd.to_datetime(df.index, unit='s')
-    
-    # Ensure index is datetime
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
-    
-    # Ensure timezone naive
-    if df.index.tz is not None:
-        df.index = df.index.tz_localize(None)
-    
+    # 1. If 'Date' is a column (likely from the new save format), set it as index
+    if 'Date' in df.columns:
+        # Convert to datetime if needed
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.set_index('Date')
+
+    # 2. If index is 'Date', check its type
+    if df.index.name == 'Date':
+        # Convert Unix timestamp (ms) to datetime if read as int
+        if df.index.dtype == 'int64' or str(df.index.dtype).startswith('int'):
+            if df.index.max() > 1e12:  # milliseconds
+                df.index = pd.to_datetime(df.index, unit='ms')
+            else:  # seconds
+                df.index = pd.to_datetime(df.index, unit='s')
+        
+        # Ensure it is actually datetime
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index)
+        
+        # Strip timezone if present
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+            
     df.index.name = "Date"
     return df
 
