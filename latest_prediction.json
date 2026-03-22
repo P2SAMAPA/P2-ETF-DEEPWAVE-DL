@@ -8,8 +8,8 @@
     "tsl_triggered": false,
     "in_cash": false,
     "current_z": 2.444,
-    "z_reentry": 1.0,
-    "tsl_pct": 12.0
+    "z_reentry": 1.1,
+    "tsl_pct": 10
   },
   "tbill_rate": 3.62,
   "predictions": {
