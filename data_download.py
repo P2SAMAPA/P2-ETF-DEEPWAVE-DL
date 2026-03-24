@@ -27,35 +27,75 @@ os.makedirs(config.DATA_DIR, exist_ok=True)
 # ─────────────────────────────────────────────────────────────
 
 def fetch_prices(tickers, start, end):
+    """
+    Fetch adjusted close prices with rate‑limit avoidance.
+    Uses a session with browser headers, per‑ticker delays, and exponential backoff.
+    """
     print(f"Fetching prices {start} -> {end}")
+    import time
+    import random
+    import requests
+
+    # Create a session with realistic headers
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Connection': 'keep-alive',
+    })
+
     frames = []
+    failed = []
 
     for ticker in tqdm(tickers, desc="Prices"):
-        try:
-            df = yf.download(ticker, start=start, end=end, auto_adjust=True, progress=False)
-            if df.empty:
-                continue
+        # Random delay between tickers (3–6 seconds)
+        time.sleep(random.uniform(3.0, 6.0))
 
-            # Flatten MultiIndex columns returned by newer yfinance versions
-            # e.g. ('Close', 'TLT') or ('Close', '') -> use ticker name directly
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [col[0] for col in df.columns]
+        success = False
+        for attempt in range(3):  # up to 3 attempts
+            try:
+                tkr = yf.Ticker(ticker, session=session)
+                df = tkr.history(start=start, end=end, auto_adjust=True)
 
-            close = df[["Close"]].rename(columns={"Close": ticker})
-            frames.append(close)
-        except Exception as e:
-            print(f"WARNING: {ticker} failed: {e}")
+                if df.empty:
+                    # No data for this period (weekend/holiday) – not an error
+                    print(f"{ticker}: no data for {start}–{end}")
+                    break   # exit retry loop, no need to retry
+
+                # Extract Close column and rename to ticker
+                close = df[["Close"]].rename(columns={"Close": ticker})
+                frames.append(close)
+                success = True
+                break
+
+            except Exception as e:
+                print(f"{ticker}: attempt {attempt+1} failed: {e}")
+                if attempt < 2:
+                    # Exponential backoff: 5s, 10s, 20s (+ jitter)
+                    wait = (2 ** attempt) * 5 + random.uniform(0, 2)
+                    print(f"  Retrying in {wait:.2f}s...")
+                    time.sleep(wait)
+                # If it's a rate limit, also sleep longer
+                if "Rate limit" in str(e) or "Too Many Requests" in str(e):
+                    cooldown = random.uniform(30, 60)
+                    print(f"  Rate limited – sleeping {cooldown:.0f}s")
+                    time.sleep(cooldown)
+
+        if not success:
+            failed.append(ticker)
+
+    if failed:
+        print(f"Warning: Failed to download tickers: {failed}")
 
     if not frames:
         raise RuntimeError("No price data fetched.")
 
     prices = pd.concat(frames, axis=1)
 
-    # Flatten MultiIndex columns if concat produced one
+    # Clean column names
     if isinstance(prices.columns, pd.MultiIndex):
         prices.columns = [col[0] if col[0] != '' else col[1] for col in prices.columns]
-
-    # Ensure all column names are clean strings (not tuples or stringified tuples)
     prices.columns = [str(c).strip() for c in prices.columns]
 
     prices.index = pd.to_datetime(prices.index)
