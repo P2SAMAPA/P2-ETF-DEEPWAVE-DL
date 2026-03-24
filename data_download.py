@@ -29,21 +29,11 @@ os.makedirs(config.DATA_DIR, exist_ok=True)
 def fetch_prices(tickers, start, end):
     """
     Fetch adjusted close prices with rate‑limit avoidance.
-    Uses a session with browser headers, per‑ticker delays, and exponential backoff.
+    Uses per‑ticker delays, exponential backoff, and no custom session.
     """
     print(f"Fetching prices {start} -> {end}")
     import time
     import random
-    import requests
-
-    # Create a session with realistic headers
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Connection': 'keep-alive',
-    })
 
     frames = []
     failed = []
@@ -55,7 +45,7 @@ def fetch_prices(tickers, start, end):
         success = False
         for attempt in range(3):  # up to 3 attempts
             try:
-                tkr = yf.Ticker(ticker, session=session)
+                tkr = yf.Ticker(ticker)
                 df = tkr.history(start=start, end=end, auto_adjust=True)
 
                 if df.empty:
