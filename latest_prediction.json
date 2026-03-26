@@ -1,19 +1,68 @@
 {
   "as_of_date": "2026-03-26",
   "winner_model": "model_b",
-  "final_signal": "\u2014",
-  "final_confidence": null,
+  "final_signal": "VNQ",
+  "final_confidence": 0.248,
   "tsl_status": {
     "two_day_cumul_pct": 4.29,
     "tsl_triggered": false,
     "in_cash": false,
-    "current_z": 0.0,
+    "current_z": 1.359,
     "z_reentry": 1.1,
-    "tsl_pct": 10
+    "tsl_pct": 10.0
   },
   "tbill_rate": 3.63,
-  "predictions": {},
+  "predictions": {
+    "model_a": {
+      "model": "model_a",
+      "lookback": 60,
+      "signal": "TLT",
+      "confidence": 0.1799,
+      "z_score": 2.03,
+      "probabilities": {
+        "TLT": 0.1799,
+        "VCIT": 0.1472,
+        "LQD": 0.1482,
+        "HYG": 0.1277,
+        "VNQ": 0.1259,
+        "GLD": 0.1476,
+        "SLV": 0.1235
+      }
+    },
+    "model_b": {
+      "model": "model_b",
+      "lookback": 60,
+      "signal": "VNQ",
+      "confidence": 0.248,
+      "z_score": 1.359,
+      "probabilities": {
+        "TLT": 0.1904,
+        "VCIT": 0.0526,
+        "LQD": 0.0118,
+        "HYG": 0.1396,
+        "VNQ": 0.248,
+        "GLD": 0.1604,
+        "SLV": 0.1971
+      }
+    },
+    "model_c": {
+      "model": "model_c",
+      "lookback": 60,
+      "signal": "TLT",
+      "confidence": 0.1621,
+      "z_score": 1.331,
+      "probabilities": {
+        "TLT": 0.1621,
+        "VCIT": 0.1308,
+        "LQD": 0.1211,
+        "HYG": 0.1372,
+        "VNQ": 0.1578,
+        "GLD": 0.1556,
+        "SLV": 0.1355
+      }
+    }
+  },
   "trained_from_year": 2008,
   "trained_wavelet": "db4",
-  "trained_at": "2026-03-26T02:10:18.900141"
+  "trained_at": "2026-03-26T04:59:17.370092"
 }
