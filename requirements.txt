@@ -1,28 +1,18 @@
+# requirements.txt — Streamlit Cloud compatible
+# Pin ranges that are known stable on Python 3.11
+
 streamlit>=1.35.0
-# ── Core Data ─────────────────────────────────────────────────────────────────
+plotly>=5.20.0
 pandas>=2.0.0
-numpy>=1.26.0
-yfinance>=0.2.40
-fredapi>=0.5.1
-requests>=2.31.0
-
-# ── Wavelet ────────────────────────────────────────────────────────────────────
-PyWavelets>=1.6.0
-
-# ── Deep Learning (Python 3.13 compatible wheels exist for 2.18+) ─────────────
-tensorflow-cpu>=2.18.0
+numpy>=1.26.0,<2.0.0
+tensorflow>=2.16.0
 scikit-learn>=1.4.0
-
-# ── Hugging Face ──────────────────────────────────────────────────────────────
+PyWavelets>=1.6.0
 huggingface-hub>=0.23.0
-datasets>=2.19.0
-
-# ── Streamlit Dashboard ───────────────────────────────────────────────────────
-plotly>=5.22.0
-
-# ── Evaluation / Utils ────────────────────────────────────────────────────────
-scipy>=1.13.0
 pyarrow>=16.0.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+joblib>=1.3.0
+fredapi>=0.5.1
+yfinance>=0.2.40
 tqdm>=4.66.0
-python-dotenv>=1.0.1
-joblib>=1.4.0
