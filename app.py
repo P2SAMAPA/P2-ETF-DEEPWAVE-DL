@@ -400,8 +400,10 @@ with st.sidebar:
         if has_gh_token:
             ok = trigger_github_training(start_year, wavelet_key, tsl_pct,
                                           z_reentry, int(max_epochs), fee_bps)
-            st.success("✅ FI retraining triggered!") if ok \
-                else st.error("❌ Trigger failed.")
+            if ok:
+                st.success("✅ FI retraining triggered!")
+            else:
+                st.error("❌ Trigger failed.")
         else:
             st.info(f"Run train_models.yml manually with start_year={start_year} "
                     f"wavelet={wavelet_key} epochs={max_epochs}")
@@ -412,8 +414,10 @@ with st.sidebar:
             ok = trigger_github_training(start_year, wavelet_key, tsl_pct,
                                           z_reentry, int(max_epochs), fee_bps,
                                           workflow="train_equity_models.yml")
-            st.success("✅ Equity retraining triggered!") if ok \
-                else st.error("❌ Trigger failed.")
+            if ok:
+                st.success("✅ Equity retraining triggered!")
+            else:
+                st.error("❌ Trigger failed.")
         else:
             st.info("Run train_equity_models.yml manually.")
 
