@@ -14,12 +14,11 @@ FRED_API_KEY    = os.getenv("FRED_API_KEY", "")
 GITHUB_TOKEN    = os.getenv("P2SAMAPA_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
 
 # ── Universe ───────────────────────────────────────────────────────────────────
-# Fixed Income ETFs (original)
+# Fixed Income ETFs (original tradeable universe)
 FI_ETFS         = ["TLT", "VCIT", "LQD", "HYG", "VNQ", "GLD", "SLV"]
 
-# Equity ETFs (new)
+# Equity ETFs (tradeable universe — SPY excluded, used as benchmark only)
 EQUITY_ETFS     = [
-    "SPY",   # S&P 500
     "QQQ",   # NASDAQ 100
     "XLK",   # Technology
     "XLF",   # Financials
@@ -34,9 +33,10 @@ EQUITY_ETFS     = [
     "IWM",   # Russell 2000 Small Cap
 ]
 
-# Combined — all tickers fetched and stored together in etf_price.parquet
+# Combined — all tickers fetched into etf_price.parquet
 ETFS            = FI_ETFS + EQUITY_ETFS
 
+# SPY and AGG are benchmarks only — never traded, used for performance comparison
 BENCHMARKS      = ["SPY", "AGG"]
 ALL_TICKERS     = ETFS + BENCHMARKS
 
@@ -55,22 +55,21 @@ MACRO_SERIES = {
 SEED_START      = "2008-01-01"
 VOL_WINDOW      = 21
 
-# ── Wavelet (hardcoded — auto-selected by model) ───────────────────────────────
+# ── Wavelet ────────────────────────────────────────────────────────────────────
 WAVELET         = "db4"
 WAVELET_LEVELS  = 3
 WAVELET_OPTIONS = ["db4", "db2", "haar", "sym5"]
 
 # ── Model ──────────────────────────────────────────────────────────────────────
-LOOKBACKS       = [30, 45, 60]       # auto-selected by lowest val MSE
+LOOKBACKS       = [30, 45, 60]
 DEFAULT_LOOKBACK= 30
-TRAIN_SPLIT     = 0.80               # hardcoded 80/10/10
+TRAIN_SPLIT     = 0.80
 VAL_SPLIT       = 0.10
-# TEST = remaining 0.10
 MAX_EPOCHS      = 80
 BATCH_SIZE      = 32
 PATIENCE        = 10
 
-# ── Risk Controls (defaults — overridden by UI sliders) ────────────────────────
+# ── Risk Controls ──────────────────────────────────────────────────────────────
 DEFAULT_TSL_PCT   = 10
 DEFAULT_Z_REENTRY = 1.1
 
