@@ -8,17 +8,15 @@ HF_DATASET_REPO = "P2SAMAPA/p2-etf-deepwave-dl"
 HF_SPACE_REPO   = "P2SAMAPA/P2-ETF-DEEPWAVE-DL"
 GITHUB_REPO     = "P2SAMAPA/P2-ETF-DEEPWAVE-DL"
 
-# ── API Keys ───────────────────────────────────────────────────────────────────
-HF_TOKEN        = os.getenv("HF_TOKEN", "")
-FRED_API_KEY    = os.getenv("FRED_API_KEY", "")
-GITHUB_TOKEN    = os.getenv("P2SAMAPA_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
+# ── API Keys (loaded from env / Streamlit secrets at runtime) ─────────────────
+HF_TOKEN     = os.getenv("HF_TOKEN", "")
+FRED_API_KEY = os.getenv("FRED_API_KEY", "")
+GITHUB_TOKEN = os.getenv("P2SAMAPA_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
 
 # ── Universe ───────────────────────────────────────────────────────────────────
-# Fixed Income ETFs (original tradeable universe)
-FI_ETFS         = ["TLT", "VCIT", "LQD", "HYG", "VNQ", "GLD", "SLV"]
+FI_ETFS = ["TLT", "VCIT", "LQD", "HYG", "VNQ", "GLD", "SLV"]
 
-# Equity ETFs (tradeable universe — SPY excluded, used as benchmark only)
-EQUITY_ETFS     = [
+EQUITY_ETFS = [
     "QQQ",   # NASDAQ 100
     "XLK",   # Technology
     "XLF",   # Financials
@@ -33,12 +31,9 @@ EQUITY_ETFS     = [
     "IWM",   # Russell 2000 Small Cap
 ]
 
-# Combined — all tickers fetched into etf_price.parquet
-ETFS            = FI_ETFS + EQUITY_ETFS
-
-# SPY and AGG are benchmarks only — never traded, used for performance comparison
-BENCHMARKS      = ["SPY", "AGG"]
-ALL_TICKERS     = ETFS + BENCHMARKS
+ETFS        = FI_ETFS + EQUITY_ETFS   # all tradeable tickers → etf_price.parquet
+BENCHMARKS  = ["SPY", "AGG"]          # never traded, comparison only
+ALL_TICKERS = ETFS + BENCHMARKS
 
 # ── FRED Macro Series ─────────────────────────────────────────────────────────
 MACRO_SERIES = {
@@ -52,31 +47,34 @@ MACRO_SERIES = {
 }
 
 # ── Data ───────────────────────────────────────────────────────────────────────
-SEED_START      = "2008-01-01"
-VOL_WINDOW      = 21
+SEED_START = "2008-01-01"
+VOL_WINDOW = 21
 
-# ── Wavelet ────────────────────────────────────────────────────────────────────
-WAVELET         = "db4"
+# ── Wavelet — auto-selected during training ────────────────────────────────────
+# All 4 options are tried per lookback; best validation return is kept.
+# The winner is stamped into training_summary.json and shown in the UI.
+WAVELET         = "db4"               # fallback if summary not yet available
 WAVELET_LEVELS  = 3
 WAVELET_OPTIONS = ["db4", "db2", "haar", "sym5"]
 
 # ── Model ──────────────────────────────────────────────────────────────────────
-LOOKBACKS       = [30, 45, 60]
-DEFAULT_LOOKBACK= 30
-TRAIN_SPLIT     = 0.80
-VAL_SPLIT       = 0.10
-MAX_EPOCHS      = 80
-BATCH_SIZE      = 32
-PATIENCE        = 10
+LOOKBACKS        = [30, 45, 60]
+DEFAULT_LOOKBACK = 30
+TRAIN_SPLIT      = 0.80
+VAL_SPLIT        = 0.10
+MAX_EPOCHS       = 80                 # hardcoded
+BATCH_SIZE       = 32
+PATIENCE         = 10
 
-# ── Risk Controls ──────────────────────────────────────────────────────────────
-DEFAULT_TSL_PCT   = 10
-DEFAULT_Z_REENTRY = 1.1
+# ── Risk Controls — hardcoded, displayed in sidebar as info only ───────────────
+DEFAULT_TSL_PCT   = 12               # trailing stop loss %
+DEFAULT_Z_REENTRY = 0.9             # z-score re-entry threshold
+FEE_BPS           = 12              # transaction cost in basis points
 
 # ── Start year range ───────────────────────────────────────────────────────────
-START_YEAR_MIN  = 2008
-START_YEAR_MAX  = 2024
+START_YEAR_MIN = 2008
+START_YEAR_MAX = 2024
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-MODELS_DIR      = "models"
-DATA_DIR        = "data"
+MODELS_DIR = "models"
+DATA_DIR   = "data"
