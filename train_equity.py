@@ -148,8 +148,15 @@ def _prep_labels(prep: dict):
 
 
 def _class_weights(y_tr):
-    cw = compute_class_weight("balanced", classes=np.arange(EQUITY_N_CLASSES), y=y_tr)
-    return {i: float(w) for i, w in enumerate(cw)}
+    """Compute balanced class weights for classes present in y_tr only.
+    Classes with zero samples (e.g. SPY=0 when SPY is also a benchmark
+    and never wins) are assigned weight 1.0 to avoid sklearn ValueError.
+    """
+    present = np.unique(y_tr)
+    cw      = compute_class_weight("balanced", classes=present, y=y_tr)
+    weight_map = dict(zip(present.tolist(), cw.tolist()))
+    # Fill any missing class index with 1.0
+    return {i: float(weight_map.get(i, 1.0)) for i in range(EQUITY_N_CLASSES)}
 
 
 # ─── Per-model trainer ────────────────────────────────────────────────────────
