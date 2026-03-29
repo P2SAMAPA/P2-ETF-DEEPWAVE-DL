@@ -1,7 +1,7 @@
 # predict_equity.py
-# Generates next-trading-day ETF signal from equity model weights.
-# Mirrors predict.py exactly — uses preprocess_equity, equity-namespaced
-# weight files, and writes to latest_prediction_equity.json.
+# Generates next-trading-day equity ETF signal from saved equity model weights.
+# Mirrors predict.py — uses preprocess_equity, equity weight paths
+# (models/model_{a|b|c}_eq/lb{n}/best.keras), writes latest_prediction_equity.json.
 
 import argparse
 import json
@@ -14,10 +14,11 @@ import pandas as pd
 
 import config
 from data_download import load_local
-from preprocess_equity import build_features, apply_scaler, load_scaler
-import model_a, model_b, model_c
+from preprocess_equity import build_features, apply_scaler, load_scaler, normalize_etf_columns
 
-ETFS = config.EQUITY_ETFS   # 13 equity tickers
+ETFS           = config.EQUITY_ETFS   # 13
+OUTPUT_FILE    = "latest_prediction_equity.json"
+EQUITY_N_CLASSES = len(ETFS)
 
 US_HOLIDAYS = {
     date(2025,1,1),  date(2025,1,20),  date(2025,2,17), date(2025,4,18),
@@ -28,8 +29,6 @@ US_HOLIDAYS = {
     date(2026,11,26),date(2026,12,25),
 }
 
-OUTPUT_FILE = "latest_prediction_equity.json"
-
 
 def next_trading_day(from_date=None):
     d = from_date or date.today()
@@ -39,26 +38,25 @@ def next_trading_day(from_date=None):
     return d
 
 
-# ─── Download equity weights from HF Dataset ─────────────────────────────────
+# ─── Download helpers ─────────────────────────────────────────────────────────
 
 def download_equity_weights_from_hf():
     try:
         from huggingface_hub import HfApi, hf_hub_download
         token = config.HF_TOKEN or None
-        print("  Downloading equity weights from HF Dataset...")
         api   = HfApi(token=token)
         files = api.list_repo_files(repo_id=config.HF_DATASET_REPO,
                                     repo_type="dataset", token=token)
         for f in files:
-            if ("_eq_" in f or "equity" in f) and \
-               f.endswith(('.keras', '.pkl', '.json')) and \
-               f.startswith('models/'):
-                local_path = f
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            # Equity weight directories are named model_a_eq/, model_b_eq/, model_c_eq/
+            if ("_eq" in f) and f.startswith("models/") and \
+               f.endswith((".keras", ".pkl", ".json")):
+                local = f
+                os.makedirs(os.path.dirname(local), exist_ok=True)
                 try:
                     dl = hf_hub_download(repo_id=config.HF_DATASET_REPO,
                                          filename=f, repo_type="dataset", token=token)
-                    shutil.copy(dl, local_path)
+                    shutil.copy(dl, local)
                     print(f"    ✓ {f}")
                 except Exception as e:
                     print(f"    ✗ {f}: {e}")
@@ -98,10 +96,7 @@ def softmax_probs(preds: np.ndarray) -> np.ndarray:
 
 
 def z_score_val(probs: np.ndarray) -> float:
-    top   = probs.max()
-    mu    = probs.mean()
-    sigma = probs.std() + 1e-8
-    return float((top - mu) / sigma)
+    return float((probs.max() - probs.mean()) / (probs.std() + 1e-8))
 
 
 # ─── Best lookbacks ───────────────────────────────────────────────────────────
@@ -111,25 +106,27 @@ def get_best_lookbacks() -> dict:
     if os.path.exists(summary_path):
         with open(summary_path) as f:
             s = json.load(f)
-        return {
-            "model_a": s.get("model_a", {}).get("best_lookback", config.DEFAULT_LOOKBACK),
-            "model_b": s.get("model_b", {}).get("best_lookback", config.DEFAULT_LOOKBACK),
-            "model_c": s.get("model_c", {}).get("best_lookback", config.DEFAULT_LOOKBACK),
-        }
+        return {k: s.get(k, {}).get("best_lookback", config.DEFAULT_LOOKBACK)
+                for k in ["model_a","model_b","model_c"]}
     return {k: config.DEFAULT_LOOKBACK for k in ["model_a","model_b","model_c"]}
 
 
 # ─── Load equity model ────────────────────────────────────────────────────────
 
 def load_equity_model(tag: str, lookback: int):
-    import keras
-    path = os.path.join(config.MODELS_DIR, f"model_{tag}_eq_lb{lookback}.keras")
+    """Load best.keras from the equity model directory."""
+    from tensorflow import keras
+    # tag here is model_a / model_b / model_c
+    short = tag.replace("model_", "")   # a / b / c
+    path  = os.path.join(config.MODELS_DIR, f"model_{short}_eq",
+                         f"lb{lookback}", "best.keras")
     return keras.models.load_model(path)
 
 
 # ─── Single model inference ───────────────────────────────────────────────────
 
-def predict_one(tag: str, data: dict, lookback: int, is_dual: bool) -> dict:
+def predict_one(tag: str, data: dict, lookback: int) -> dict:
+    is_dual = tag == "model_c"
     try:
         m = load_equity_model(tag, lookback)
     except Exception as e:
@@ -141,15 +138,16 @@ def predict_one(tag: str, data: dict, lookback: int, is_dual: bool) -> dict:
         features = build_features(data)
         window   = features.iloc[-lookback:].values
         if len(window) < lookback:
-            print(f"  [EQ-{tag.upper()}] Not enough data for lookback={lookback}")
+            print(f"  [EQ-{tag.upper()}] Not enough data (need {lookback}, have {len(window)})")
             return {}
 
-        N, F = 1, window.shape[1]
-        X    = apply_scaler(window.reshape(1, lookback, F), scaler)
+        n_features     = window.shape[1]
+        n_etf_features = (len(ETFS) * 2) * (config.WAVELET_LEVELS + 1)
+
+        X = apply_scaler(window.reshape(1, lookback, n_features), scaler)
 
         if is_dual:
-            n_etf  = (len(ETFS) * 2) * (config.WAVELET_LEVELS + 1)
-            inputs = [X[:, :, :n_etf], X[:, :, n_etf:]]
+            inputs = [X[:, :, :n_etf_features], X[:, :, n_etf_features:]]
         else:
             inputs = X
 
@@ -162,14 +160,9 @@ def predict_one(tag: str, data: dict, lookback: int, is_dual: bool) -> dict:
 
         prob_dict = {ETFS[i]: round(float(probs[i]), 4) for i in range(len(ETFS))}
 
-        return dict(
-            model        = tag,
-            lookback     = lookback,
-            signal       = etf,
-            confidence   = round(conf, 4),
-            z_score      = round(z, 3),
-            probabilities= prob_dict,
-        )
+        return dict(model=tag, lookback=lookback, signal=etf,
+                    confidence=round(conf, 4), z_score=round(z, 3),
+                    probabilities=prob_dict)
     except Exception as e:
         print(f"  [EQ-{tag.upper()}] Inference error: {e}")
         return {}
@@ -178,25 +171,22 @@ def predict_one(tag: str, data: dict, lookback: int, is_dual: bool) -> dict:
 # ─── TSL check ───────────────────────────────────────────────────────────────
 
 def check_tsl_status(data, tsl_pct, z_reentry, current_z):
-    from preprocess_equity import normalize_etf_columns
-    ret_df = data.get("etf_ret", pd.DataFrame())
+    ret_df   = data.get("etf_ret", pd.DataFrame())
     if ret_df.empty:
-        return dict(two_day_cumul_pct=0, tsl_triggered=False,
-                    in_cash=False, current_z=current_z,
-                    z_reentry=z_reentry, tsl_pct=tsl_pct)
+        return dict(two_day_cumul_pct=0, tsl_triggered=False, in_cash=False,
+                    current_z=current_z, z_reentry=z_reentry, tsl_pct=tsl_pct)
     ret_df   = normalize_etf_columns(ret_df)
     etf_cols = [c for c in ETFS if c in ret_df.columns]
     if not etf_cols:
-        return dict(two_day_cumul_pct=0, tsl_triggered=False,
-                    in_cash=False, current_z=current_z,
-                    z_reentry=z_reentry, tsl_pct=tsl_pct)
+        return dict(two_day_cumul_pct=0, tsl_triggered=False, in_cash=False,
+                    current_z=current_z, z_reentry=z_reentry, tsl_pct=tsl_pct)
     last2     = ret_df[etf_cols].iloc[-2:]
     held_etf  = last2.iloc[-1].idxmax()
     two_day   = float(last2[held_etf].sum()) * 100
     triggered = two_day <= -tsl_pct
     in_cash   = triggered and (current_z < z_reentry)
-    return dict(two_day_cumul_pct=round(two_day,2), tsl_triggered=triggered,
-                in_cash=in_cash, current_z=round(current_z,3),
+    return dict(two_day_cumul_pct=round(two_day, 2), tsl_triggered=triggered,
+                in_cash=in_cash, current_z=round(current_z, 3),
                 z_reentry=z_reentry, tsl_pct=tsl_pct)
 
 
@@ -220,20 +210,19 @@ def run_predict(tsl_pct=config.DEFAULT_TSL_PCT,
 
     summary_path = os.path.join(config.MODELS_DIR, "training_summary_equity.json")
     if not os.path.exists(summary_path):
-        print("\n  No local equity weights — downloading from HF Dataset...")
+        print("\n  No equity weights — downloading from HF Dataset...")
         download_equity_weights_from_hf()
 
     lookbacks = get_best_lookbacks()
 
-    # Signal date logic
+    # Signal date
     now_est  = datetime.utcnow() - timedelta(hours=5)
     today    = now_est.date()
-    hour_est = now_est.hour
-    if today.weekday() < 5 and today not in US_HOLIDAYS and hour_est < 16:
-        next_td = today
-    else:
-        next_td = next_trading_day(today)
+    next_td  = today if (today.weekday() < 5 and today not in US_HOLIDAYS
+                         and now_est.hour < 16) \
+                     else next_trading_day(today)
 
+    # T-bill rate from macro
     tbill_val = 3.6
     try:
         from preprocess_equity import flatten_columns
@@ -243,14 +232,17 @@ def run_predict(tsl_pct=config.DEFAULT_TSL_PCT,
     except Exception:
         pass
 
+    # Run all 3 models
     predictions = {}
-    for tag, is_dual in [("model_a", False), ("model_b", False), ("model_c", True)]:
+    for tag in ["model_a", "model_b", "model_c"]:
         lb  = lookbacks[tag]
-        res = predict_one(tag, data, lb, is_dual)
+        res = predict_one(tag, data, lb)
         if res:
             predictions[tag] = res
-            print(f"  [EQ-{tag.upper()}] Signal={res['signal']}  "
-                  f"Conf={res['confidence']:.1%}  Z={res['z_score']:.2f}σ")
+            print(f"  [EQ-{tag.upper()}] {res['signal']} | "
+                  f"conf={res['confidence']:.1%} | z={res['z_score']:.2f}σ")
+        else:
+            print(f"  [EQ-{tag.upper()}] No prediction generated")
 
     # Winner from equity evaluation results
     winner_model = "model_a"
@@ -264,13 +256,13 @@ def run_predict(tsl_pct=config.DEFAULT_TSL_PCT,
     tsl_status = check_tsl_status(data, tsl_pct, z_reentry, current_z)
 
     if tsl_status["in_cash"]:
-        final_signal     = "CASH"
-        final_confidence = None
+        final_signal, final_confidence = "CASH", None
     else:
         wp               = predictions.get(winner_model, {})
         final_signal     = wp.get("signal", "—")
         final_confidence = wp.get("confidence")
 
+    # Training metadata
     trained_from_year = trained_wavelet = trained_at = None
     if os.path.exists(summary_path):
         with open(summary_path) as _f:
@@ -299,9 +291,6 @@ def run_predict(tsl_pct=config.DEFAULT_TSL_PCT,
 
     print(f"\n  Next trading day : {next_td}")
     print(f"  Final signal     : {final_signal}")
-    for tag, p in predictions.items():
-        print(f"  [EQ-{tag.upper()}] {p['signal']} | "
-              f"conf={p['confidence']:.1%} | z={p['z_score']:.2f}σ")
     print(f"  Saved → {OUTPUT_FILE}")
     return output
 
