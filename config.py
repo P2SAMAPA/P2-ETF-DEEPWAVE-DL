@@ -14,7 +14,29 @@ FRED_API_KEY    = os.getenv("FRED_API_KEY", "")
 GITHUB_TOKEN    = os.getenv("P2SAMAPA_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
 
 # ── Universe ───────────────────────────────────────────────────────────────────
-ETFS            = ["TLT", "VCIT", "LQD", "HYG", "VNQ", "GLD", "SLV"]
+# Fixed Income ETFs (original)
+FI_ETFS         = ["TLT", "VCIT", "LQD", "HYG", "VNQ", "GLD", "SLV"]
+
+# Equity ETFs (new)
+EQUITY_ETFS     = [
+    "SPY",   # S&P 500
+    "QQQ",   # NASDAQ 100
+    "XLK",   # Technology
+    "XLF",   # Financials
+    "XLE",   # Energy
+    "XLV",   # Health Care
+    "XLI",   # Industrials
+    "XLY",   # Consumer Disc
+    "XLP",   # Consumer Staples
+    "XLU",   # Utilities
+    "XME",   # Metal and Mining
+    "GDX",   # Gold Miners
+    "IWM",   # Russell 2000 Small Cap
+]
+
+# Combined — all tickers fetched and stored together in etf_price.parquet
+ETFS            = FI_ETFS + EQUITY_ETFS
+
 BENCHMARKS      = ["SPY", "AGG"]
 ALL_TICKERS     = ETFS + BENCHMARKS
 
