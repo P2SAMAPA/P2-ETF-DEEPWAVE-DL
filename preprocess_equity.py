@@ -1,7 +1,7 @@
 # preprocess_equity.py
-# Identical pipeline to preprocess.py — only the ETF universe differs.
-# Uses config.EQUITY_ETFS instead of config.ETFS so FI and equity
-# models stay fully independent (separate scalers, separate class labels).
+# Identical pipeline to preprocess.py — equity ETF universe only.
+# Accepts an explicit `wavelet` parameter so train_equity.py can sweep
+# all 4 wavelet options and pick the best.
 
 import os
 import numpy as np
@@ -15,7 +15,7 @@ import config
 os.makedirs(config.DATA_DIR,   exist_ok=True)
 os.makedirs(config.MODELS_DIR, exist_ok=True)
 
-ETFS = config.EQUITY_ETFS   # 13 equity tickers
+ETFS = config.EQUITY_ETFS   # 12 equity tickers
 
 
 # ─── Column normalisation ─────────────────────────────────────────────────────
@@ -65,16 +65,15 @@ def wavelet_decompose_1d(series: np.ndarray,
         if len(rec) < len(series):
             rec = np.pad(rec, (0, len(series) - len(rec)))
         reconstructed.append(rec)
-    out = np.stack(reconstructed, axis=1)
-    assert out.ndim == 2, f"wavelet shape error: {out.shape}"
-    return out
+    return np.stack(reconstructed, axis=1)
 
 
-def apply_wavelet_to_df(df: pd.DataFrame) -> pd.DataFrame:
+def apply_wavelet_to_df(df: pd.DataFrame,
+                         wavelet: str = config.WAVELET) -> pd.DataFrame:
     parts = []
     for col in df.columns:
         series = df[col].values.flatten().astype(float)
-        decomp = wavelet_decompose_1d(series)
+        decomp = wavelet_decompose_1d(series, wavelet=wavelet)
         labels = [f"{col}_A3", f"{col}_D3", f"{col}_D2", f"{col}_D1"]
         parts.append(pd.DataFrame(decomp, index=df.index, columns=labels))
     return pd.concat(parts, axis=1)
@@ -82,7 +81,8 @@ def apply_wavelet_to_df(df: pd.DataFrame) -> pd.DataFrame:
 
 # ─── Feature builder ─────────────────────────────────────────────────────────
 
-def build_features(data: dict) -> pd.DataFrame:
+def build_features(data: dict,
+                   wavelet: str = config.WAVELET) -> pd.DataFrame:
     etf_ret = normalize_etf_columns(data["etf_ret"].copy())
     etf_vol = normalize_etf_columns(data["etf_vol"].copy())
     macro   = flatten_columns(data["macro"].copy())
@@ -96,17 +96,12 @@ def build_features(data: dict) -> pd.DataFrame:
     etf_vol.columns = [f"{c}_vol" for c in etf_vol.columns]
 
     combined = pd.concat([etf_ret, etf_vol, macro], axis=1).dropna()
-    return apply_wavelet_to_df(combined)
+    return apply_wavelet_to_df(combined, wavelet=wavelet)
 
 
-# ─── TARGET: CLASS LABEL ─────────────────────────────────────────────────────
+# ─── Target ───────────────────────────────────────────────────────────────────
 
 def build_targets_classification(data: dict) -> pd.Series:
-    """
-    For each day, the target is the INTEGER INDEX of the equity ETF with the
-    highest next-day log-return.  Shape: (T,) dtype int32.
-    Class 0 = SPY, 1 = QQQ, ..., 12 = IWM  (matches EQUITY_ETFS order).
-    """
     ret      = normalize_etf_columns(data["etf_ret"].copy())
     etf_cols = [c for c in ETFS if c in ret.columns]
     ret      = ret[etf_cols]
@@ -117,23 +112,18 @@ def build_targets_classification(data: dict) -> pd.Series:
 
 # ─── Sequence windowing ───────────────────────────────────────────────────────
 
-def make_sequences(features: pd.DataFrame,
-                   targets:  pd.Series,
-                   lookback: int):
+def make_sequences(features: pd.DataFrame, targets: pd.Series, lookback: int):
     common   = features.index.intersection(targets.index)
     features = features.loc[common]
     targets  = targets.loc[common]
-
     feat_arr = features.values.astype(np.float32)
     tgt_arr  = targets.values.astype(np.int32)
     dates    = features.index
-
     X, y, d = [], [], []
     for i in range(lookback, len(feat_arr)):
         X.append(feat_arr[i - lookback: i])
         y.append(tgt_arr[i])
         d.append(dates[i])
-
     return (np.array(X, dtype=np.float32),
             np.array(y, dtype=np.int32),
             np.array(d))
@@ -166,23 +156,31 @@ def apply_scaler(X: np.ndarray, scaler: StandardScaler) -> np.ndarray:
     return scaler.transform(X.reshape(-1, F)).reshape(N, L, F)
 
 
-def save_scaler(scaler, lookback):
-    # Equity scaler has _eq suffix to avoid collision with FI scaler
-    path = os.path.join(config.MODELS_DIR, f"scaler_eq_lb{lookback}.pkl")
+def save_scaler(scaler, lookback, wavelet):
+    path = os.path.join(config.MODELS_DIR,
+                        f"scaler_eq_lb{lookback}_{wavelet}.pkl")
     joblib.dump(scaler, path)
 
 
-def load_scaler(lookback):
+def load_scaler(lookback, wavelet=None):
+    # Try wavelet-specific first, fall back to generic name for compatibility
+    if wavelet:
+        path = os.path.join(config.MODELS_DIR,
+                            f"scaler_eq_lb{lookback}_{wavelet}.pkl")
+        if os.path.exists(path):
+            return joblib.load(path)
+    # Legacy path
     path = os.path.join(config.MODELS_DIR, f"scaler_eq_lb{lookback}.pkl")
     return joblib.load(path)
 
 
 # ─── Full pipeline ────────────────────────────────────────────────────────────
 
-def run_preprocessing(data: dict, lookback: int) -> dict:
-    print(f"\n[EQUITY] Preprocessing with lookback={lookback}d ...")
+def run_preprocessing(data: dict, lookback: int,
+                      wavelet: str = config.WAVELET) -> dict:
+    print(f"\n[EQUITY] Preprocessing lookback={lookback}d wavelet={wavelet} ...")
 
-    features = build_features(data)
+    features = build_features(data, wavelet=wavelet)
     targets  = build_targets_classification(data)
 
     assert len(targets) > 0, "No equity targets generated"
@@ -198,13 +196,13 @@ def run_preprocessing(data: dict, lookback: int) -> dict:
     X_tr_sc = apply_scaler(X_tr, scaler)
     X_va_sc = apply_scaler(X_va, scaler)
     X_te_sc = apply_scaler(X_te, scaler)
-    save_scaler(scaler, lookback)
+    save_scaler(scaler, lookback, wavelet)
 
     n_etf_raw      = len(ETFS) * 2
     n_etf_features = n_etf_raw * (config.WAVELET_LEVELS + 1)
 
-    print(f"  X shape: {X_tr_sc.shape}  y shape: {y_tr.shape} "
-          f"(int class labels 0-{len(ETFS)-1})")
+    print(f"  X={X_tr_sc.shape}  y={y_tr.shape}  "
+          f"(classes 0-{len(ETFS)-1})")
     print(f"  Train={len(X_tr)}  Val={len(X_va)}  Test={len(X_te)}")
 
     return dict(
@@ -216,5 +214,6 @@ def run_preprocessing(data: dict, lookback: int) -> dict:
         n_etf_features = n_etf_features,
         lookback       = lookback,
         n_classes      = len(ETFS),
+        wavelet        = wavelet,
         feature_names  = list(features.columns),
     )
