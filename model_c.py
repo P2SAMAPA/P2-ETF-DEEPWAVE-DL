@@ -7,7 +7,7 @@ from tensorflow.keras import layers
 import config
 
 MODEL_NAME = "model_c"
-N_CLASSES  = len(config.ETFS)
+N_CLASSES  = len(config.FI_ETFS)   # 7 — FI only, not the combined ETFS list
 
 
 def build_model(lookback: int, n_etf: int, n_macro: int) -> keras.Model:
@@ -90,8 +90,10 @@ def train(prep: dict, epochs: int = config.MAX_EPOCHS):
     print(f"  Class dist: {dict(zip(*np.unique(y_tr, return_counts=True)))}")
 
     from sklearn.utils.class_weight import compute_class_weight
-    cw = compute_class_weight("balanced", classes=np.arange(N_CLASSES), y=y_tr)
-    class_weights = {i: float(w) for i, w in enumerate(cw)}
+    present    = np.unique(y_tr)
+    cw         = compute_class_weight("balanced", classes=present, y=y_tr)
+    weight_map = dict(zip(present.tolist(), cw.tolist()))
+    class_weights = {i: float(weight_map.get(i, 1.0)) for i in range(N_CLASSES)}
 
     model = build_model(lookback, n_etf, n_macro)
     X_tr_e = prep["X_tr"][:, :, :n_etf]
