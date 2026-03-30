@@ -14,6 +14,9 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
+# Debug: show all secret keys
+st.write("🔍 Debug: available secret keys =", list(st.secrets.keys()))
+
 # ─── Streamlit Cloud: load secrets into env before importing config ────────────
 def _bootstrap_secrets():
     try:
