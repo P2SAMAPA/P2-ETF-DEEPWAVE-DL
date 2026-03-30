@@ -1,12 +1,13 @@
-# requirements.txt — Streamlit Cloud compatible
-# Pin ranges that are known stable on Python 3.11
+# requirements.txt — Streamlit Cloud, Python 3.11
+# TensorFlow 2.16.1 is the last version with stable Python 3.11 CPU wheels.
+# numpy must be <2.0 for TF 2.16 compatibility.
 
-streamlit>=1.35.0
+streamlit>=1.35.0,<2.0.0
 plotly>=5.20.0
-pandas>=2.0.0
+pandas>=2.0.0,<3.0.0
 numpy>=1.26.0,<2.0.0
-tensorflow>=2.16.0
-scikit-learn>=1.4.0
+tensorflow==2.16.1
+scikit-learn>=1.4.0,<2.0.0
 PyWavelets>=1.6.0
 huggingface-hub>=0.23.0
 pyarrow>=16.0.0
