@@ -4,38 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: "Model(s): all | a | b | c | a,b etc."
+        description: "Model(s) to train: all | a | b | c | a,b etc."
         required: false
         default: "all"
-      epochs:
-        description: "Max training epochs"
-        required: false
-        default: "80"
       start_year:
-        description: "Training start year"
+        description: "Training start year (e.g. 2008, 2015)"
         required: false
         default: "2008"
-      wavelet:
-        description: "Wavelet: db4 | db2 | haar | sym5"
-        required: false
-        default: "db4"
-      tsl_pct:
-        description: "Trailing stop loss %"
-        required: false
-        default: "10"
-      z_reentry:
-        description: "Z-score re-entry threshold"
-        required: false
-        default: "1.1"
-      fee_bps:
-        description: "Trading fee in bps"
-        required: false
-        default: "10"
+    # Hardcoded in config.py — not exposed here:
+    #   epochs=80, wavelet=auto, tsl=12%, z_reentry=0.9, fee=12bps
 
 jobs:
   train-equity:
     runs-on: ubuntu-latest
-    timeout-minutes: 180   # 3 hrs — 13 ETFs vs 7 FI
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repo
@@ -75,7 +57,7 @@ jobs:
                   print(f"✗ {f}: {e}")
           EOF
 
-      - name: Train equity models
+      - name: Train equity models (wavelet auto-selected)
         env:
           HF_TOKEN:        ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -83,9 +65,7 @@ jobs:
         run: |
           python train_equity.py \
             --model      "${{ github.event.inputs.model }}" \
-            --epochs     ${{ github.event.inputs.epochs }} \
-            --start_year ${{ github.event.inputs.start_year }} \
-            --wavelet    ${{ github.event.inputs.wavelet }}
+            --start_year ${{ github.event.inputs.start_year }}
 
       - name: Push equity weights to HF Dataset
         env:
@@ -100,9 +80,9 @@ jobs:
           token = os.environ.get("HF_TOKEN")
           api   = HfApi(token=token)
 
-          # Collect equity weight files (model_a_eq/, model_b_eq/, model_c_eq/)
           files = (
-              glob.glob(os.path.join(config.MODELS_DIR, "model_*_eq", "**", "*.keras"), recursive=True) +
+              glob.glob(os.path.join(config.MODELS_DIR, "model_*_eq", "**", "*.keras"),
+                        recursive=True) +
               glob.glob(os.path.join(config.MODELS_DIR, "scaler_eq_*.pkl")) +
               [os.path.join(config.MODELS_DIR, "training_summary_equity.json")]
           )
@@ -117,7 +97,7 @@ jobs:
               )
               print(f"✓ Pushed {len(ops)} equity file(s) to HF")
           else:
-              print("No equity weight files found to push.")
+              print("No equity weight files found.")
           EOF
 
       - name: Run equity prediction
@@ -125,10 +105,7 @@ jobs:
           HF_TOKEN:        ${{ secrets.HF_TOKEN }}
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
           FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-        run: |
-          python predict_equity.py \
-            --tsl ${{ github.event.inputs.tsl_pct }} \
-            --z   ${{ github.event.inputs.z_reentry }}
+        run: python predict_equity.py
 
       - name: Push prediction to HF Dataset
         env:
@@ -143,9 +120,10 @@ jobs:
           token = os.environ.get("HF_TOKEN")
           api   = HfApi(token=token)
           if os.path.exists("latest_prediction_equity.json"):
-              api.upload_file(path_or_fileobj="latest_prediction_equity.json",
-                              path_in_repo="latest_prediction_equity.json",
-                              repo_id=config.HF_DATASET_REPO, repo_type="dataset")
+              api.upload_file(
+                  path_or_fileobj="latest_prediction_equity.json",
+                  path_in_repo="latest_prediction_equity.json",
+                  repo_id=config.HF_DATASET_REPO, repo_type="dataset")
               print("✓ Pushed latest_prediction_equity.json")
           EOF
 
@@ -156,9 +134,12 @@ jobs:
           path = os.path.join(config.MODELS_DIR, "training_summary_equity.json")
           if os.path.exists(path):
               s = json.load(open(path))
-              print(f"Trained at:  {s.get('trained_at')}")
+              print(f"Trained at:    {s.get('trained_at')}")
+              print(f"Best wavelet:  {s.get('best_wavelet')} (auto-selected)")
               print(f"ETFs ({s.get('n_classes')}): {s.get('etfs')}")
               for k in ["model_a","model_b","model_c"]:
                   if k in s:
-                      print(f"  {k}: best_lookback={s[k].get('best_lookback')}d")
+                      print(f"  {k}: best_lookback={s[k].get('best_lookback')}d "
+                            f"best_wavelet={s[k].get('best_wavelet')} "
+                            f"val_acc={s[k].get('best_val_acc',0):.4f}")
           EOF
