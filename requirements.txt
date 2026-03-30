@@ -1,11 +1,12 @@
 # requirements.txt — Streamlit Cloud, Python 3.11
-# Locked to Python 3.11 compatible versions
+# TensorFlow 2.16.1 is the last version with stable Python 3.11 CPU wheels.
+# numpy must be <2.0 for TF 2.16 compatibility.
 
 streamlit>=1.35.0,<2.0.0
 plotly>=5.20.0
 pandas>=2.0.0,<3.0.0
 numpy>=1.26.0,<2.0.0
-tensorflow==2.16.1
+tensorflow>=2.15.0,<2.17.0
 scikit-learn>=1.4.0,<2.0.0
 PyWavelets>=1.6.0
 huggingface-hub>=0.23.0
