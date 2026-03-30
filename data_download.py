@@ -15,6 +15,7 @@ import pandas as pd
 import yfinance as yf
 from fredapi import Fred
 from tqdm import tqdm
+from pandas.tseries.offsets import BDay   # <-- added import
 
 import config
 
@@ -327,10 +328,9 @@ def incremental_update():
 
     # Get last date from existing price data
     last_date = prices_existing["etf_price"].index.max()
-    today = datetime.today().normalize()
+    today = pd.Timestamp.today().normalize()   # <-- fixed
 
     # Use business day offset to skip weekends
-    from pandas.tseries.offsets import BDay
     start = last_date + BDay(1)
 
     # If start is beyond today (e.g., weekend), there are no new trading days
