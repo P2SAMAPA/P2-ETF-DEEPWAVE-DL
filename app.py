@@ -170,21 +170,39 @@ def _hf_repo() -> str:
         return config.HF_DATASET_REPO
 
 
-# ─── GitHub Actions trigger ───────────────────────────────────────────────────
-def trigger_github(start_year: int, workflow: str = "train_models.yml") -> bool:
+# ─── GitHub Actions trigger (supports both single‑year and sweep) ─────────────
+def trigger_github(start_year: int = None,
+                   workflow: str = "train_models.yml",
+                   sweep_years: list = None) -> bool:
+    """Trigger a GitHub Actions workflow.
+    
+    If sweep_years is provided, it triggers a sweep (multiple years at once).
+    Otherwise, it triggers a single training run with the given start_year.
+    """
     token = _gh_token()
     if not token:
         return False
+
     url = (f"https://api.github.com/repos/{config.GITHUB_REPO}"
            f"/actions/workflows/{workflow}/dispatches")
-    payload = {"ref": "main", "inputs": {
-        "model": "all", "epochs": str(config.MAX_EPOCHS),
-        "start_year": str(start_year),
-    }}
-    r = requests.post(url, json=payload, headers={
+
+    # Build inputs based on workflow and whether it's a sweep
+    inputs = {"model": "all"}
+    if sweep_years:
+        # Sweep mode: pass comma‑separated years in sweep_mode
+        inputs["sweep_mode"] = ",".join(str(y) for y in sweep_years)
+    else:
+        # Single‑year run: set start_year, and for FI workflow set sweep_mode = ""
+        inputs["start_year"] = str(start_year) if start_year else "2008"
+        if workflow == "train_models.yml":
+            inputs["sweep_mode"] = ""
+
+    payload = {"ref": "main", "inputs": inputs}
+    headers = {
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
-    })
+    }
+    r = requests.post(url, json=payload, headers=headers)
     return r.status_code == 204
 
 
@@ -485,9 +503,10 @@ def render_consensus_tab(universe: str, etf_colors: dict, label: str):
         has_token = bool(_gh_token())
         if has_token:
             with st.spinner(f"Triggering {label} sweep..."):
-                ok = trigger_github(trigger_years[0], workflow=wf)
+                # Pass the whole list of years to trigger a single dispatch
+                ok = trigger_github(workflow=wf, sweep_years=trigger_years)
             if ok:
-                st.success(f"✅ Triggered {len(trigger_years)} jobs.")
+                st.success(f"✅ Triggered sweep for {len(trigger_years)} years.")
             else:
                 st.error("❌ Failed. Check GITHUB_TOKEN in Streamlit secrets.")
         else:
@@ -701,7 +720,7 @@ with st.sidebar:
 
     if st.button("🧠 Retrain FI Models", use_container_width=True, type="primary"):
         if has_token:
-            ok = trigger_github(start_year, workflow="train_models.yml")
+            ok = trigger_github(start_year=start_year, workflow="train_models.yml")
             if ok:
                 st.success("✅ FI retraining triggered!")
             else:
@@ -711,7 +730,7 @@ with st.sidebar:
 
     if st.button("🚀 Retrain Equity Models", use_container_width=True):
         if has_token:
-            ok = trigger_github(start_year, workflow="train_equity_models.yml")
+            ok = trigger_github(start_year=start_year, workflow="train_equity_models.yml")
             if ok:
                 st.success("✅ Equity retraining triggered!")
             else:
