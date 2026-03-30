@@ -6,6 +6,7 @@
 import json
 import os
 import requests
+import config
 from datetime import datetime, date, timedelta
 
 import numpy as np
