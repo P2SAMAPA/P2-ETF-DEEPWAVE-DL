@@ -194,10 +194,7 @@ def main():
     # --------------------------------------------------------
     print("\n[3/4] Generating latest prediction...")
 
-    result = run_predict(
-        tsl_pct=config.DEFAULT_TSL_PCT,
-        z_reentry=config.DEFAULT_Z_REENTRY,
-    )
+    result = run_predict()   # <-- no arguments, uses config defaults
 
     # --------------------------------------------------------
     # 4. Push prediction JSON
