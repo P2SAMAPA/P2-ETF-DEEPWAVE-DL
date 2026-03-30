@@ -30,6 +30,7 @@ def fetch_prices(tickers, start, end):
     """
     Fetch adjusted close prices with rate‑limit avoidance.
     Uses per‑ticker delays, exponential backoff, and no custom session.
+    Returns empty DataFrame if no data available for the range.
     """
     print(f"Fetching prices {start} -> {end}")
     import time
@@ -78,8 +79,10 @@ def fetch_prices(tickers, start, end):
     if failed:
         print(f"Warning: Failed to download tickers: {failed}")
 
+    # If no frames were collected, return empty DataFrame
     if not frames:
-        raise RuntimeError("No price data fetched.")
+        print("No price data fetched for the requested range.")
+        return pd.DataFrame()
 
     prices = pd.concat(frames, axis=1)
 
@@ -322,25 +325,76 @@ def incremental_update():
         print("No local data found -- running seed.")
         return seed()
 
+    # Get last date from existing price data
     last_date = prices_existing["etf_price"].index.max()
-    start = (last_date + timedelta(days=1)).strftime("%Y-%m-%d")
-    end = datetime.today().strftime("%Y-%m-%d")
+    today = datetime.today().normalize()
 
-    if start < end:
-        print(f"Fetching new prices {start} -> {end}")
-        new_etf = fetch_prices(config.ETFS, start, end)
-        new_bench = fetch_prices(config.BENCHMARKS, start, end)
+    # Use business day offset to skip weekends
+    from pandas.tseries.offsets import BDay
+    start = last_date + BDay(1)
 
-        # Concatenate and drop duplicates
-        etf_price = pd.concat([prices_existing["etf_price"], new_etf])
-        bench_price = pd.concat([prices_existing["bench_price"], new_bench])
+    # If start is beyond today (e.g., weekend), there are no new trading days
+    if start > today:
+        print(f"No new trading days since last update (last date: {last_date.date()}). Skipping update.")
+        # Return existing data as is (derived data already present)
+        # Note: We still need to recompute derived data? Actually the function recomputes returns/volatility
+        # from the full etf_price and bench_price. So if there's no new data, we can just use the existing data
+        # and recompute derived data from it. But since we're not fetching new data, we should just return the
+        # existing data (including derived data). However, the caller expects data dict with all keys.
+        # We'll load all existing data via load_local() and return that.
+        existing_full = load_local()
+        if existing_full is None:
+            # Fallback: load prices and recompute derived
+            etf_price = prices_existing["etf_price"]
+            bench_price = prices_existing["bench_price"]
+            data = {
+                "etf_price": etf_price,
+                "etf_ret": compute_returns(etf_price),
+                "etf_vol": compute_volatility(compute_returns(etf_price)),
+                "bench_price": bench_price,
+                "bench_ret": compute_returns(bench_price),
+                "bench_vol": compute_volatility(compute_returns(bench_price)),
+                "macro": fetch_macro(config.SEED_START, today.strftime("%Y-%m-%d")),
+            }
+            save_all(data)
+            return data
+        return existing_full
 
-        etf_price = etf_price[~etf_price.index.duplicated(keep="last")]
-        bench_price = bench_price[~bench_price.index.duplicated(keep="last")]
-    else:
-        print("Prices already up to date.")
-        etf_price = prices_existing["etf_price"]
-        bench_price = prices_existing["bench_price"]
+    end = today.strftime("%Y-%m-%d")
+    start_str = start.strftime("%Y-%m-%d")
+
+    print(f"Fetching new prices {start_str} -> {end}")
+    new_etf = fetch_prices(config.ETFS, start_str, end)
+    new_bench = fetch_prices(config.BENCHMARKS, start_str, end)
+
+    # If either new DataFrame is empty, skip update (no new data)
+    if new_etf.empty or new_bench.empty:
+        print("No new price data available. Skipping update.")
+        # Return existing data as is
+        existing_full = load_local()
+        if existing_full is None:
+            # Fallback: use existing prices and recompute derived
+            etf_price = prices_existing["etf_price"]
+            bench_price = prices_existing["bench_price"]
+            data = {
+                "etf_price": etf_price,
+                "etf_ret": compute_returns(etf_price),
+                "etf_vol": compute_volatility(compute_returns(etf_price)),
+                "bench_price": bench_price,
+                "bench_ret": compute_returns(bench_price),
+                "bench_vol": compute_volatility(compute_returns(bench_price)),
+                "macro": fetch_macro(config.SEED_START, today.strftime("%Y-%m-%d")),
+            }
+            save_all(data)
+            return data
+        return existing_full
+
+    # Concatenate and drop duplicates
+    etf_price = pd.concat([prices_existing["etf_price"], new_etf])
+    bench_price = pd.concat([prices_existing["bench_price"], new_bench])
+
+    etf_price = etf_price[~etf_price.index.duplicated(keep="last")]
+    bench_price = bench_price[~bench_price.index.duplicated(keep="last")]
 
     data = {
         "etf_price": etf_price,
