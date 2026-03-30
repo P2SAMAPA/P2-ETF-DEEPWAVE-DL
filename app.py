@@ -13,12 +13,11 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
-from huggingface_hub import hf_hub_download, HfApi  # <-- ADDED missing import
+from huggingface_hub import hf_hub_download, HfApi
 
 # ─── Streamlit Cloud: load secrets into env before importing config ────────────
 def _bootstrap_secrets():
     try:
-        # Define the keys to sync from st.secrets to os.environ
         keys_to_sync = [
             "HF_TOKEN", 
             "FRED_API_KEY", 
@@ -29,7 +28,6 @@ def _bootstrap_secrets():
         
         for key in keys_to_sync:
             if key in st.secrets:
-                # Force update os.environ to ensure it's available globally
                 os.environ[key] = str(st.secrets[key])
                 
     except Exception as e:
@@ -38,15 +36,14 @@ def _bootstrap_secrets():
 # Execute the bootstrap immediately
 _bootstrap_secrets()
 
-# Final safety check for the specific error you are seeing
-if not os.environ.get("GITHUB_TOKEN") and not os.environ.get("P2SAMAPA_GITHUB_TOKEN"):
+# Final safety check – look directly at st.secrets (no need for os.environ)
+if not st.secrets.get("GITHUB_TOKEN") and not st.secrets.get("P2SAMAPA_GITHUB_TOKEN"):
     st.error("❌ Failed. Check GITHUB_TOKEN in Streamlit secrets.")
     st.info("Ensure your Secrets dashboard has: GITHUB_TOKEN = 'your_token'")
     st.stop()
 
 # Ensure config is available
 try:
-    # Just a sanity check – if config is missing, this will raise an ImportError
     _ = config.DEFAULT_TSL_PCT
 except (ImportError, AttributeError):
     st.error("❌ config.py is missing or incomplete. Please ensure it's in the repository.")
@@ -60,7 +57,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ─── CSS ──────────────────────────────────────────────────────────────────────
+# ─── CSS (unchanged) ──────────────────────────────────────────────────────────
 st.markdown("""
 <style>
   [data-testid="stSidebar"] { min-width:300px; max-width:300px; }
