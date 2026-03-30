@@ -6,7 +6,7 @@ streamlit>=1.35.0,<2.0.0
 plotly>=5.20.0
 pandas>=2.0.0,<3.0.0
 numpy>=1.26.0,<2.0.0
-tensorflow==2.16.1
+tensorflow==2.15.0
 scikit-learn>=1.4.0,<2.0.0
 PyWavelets>=1.6.0
 huggingface-hub>=0.23.0
