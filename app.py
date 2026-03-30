@@ -40,6 +40,19 @@ def _bootstrap_secrets():
 # Execute the bootstrap immediately
 _bootstrap_secrets()
 
+# After the bootstrap
+for key in ["GITHUB_TOKEN", "P2SAMAPA_GITHUB_TOKEN"]:
+    val = st.secrets.get(key, "")
+    env_val = os.environ.get(key, "")
+    st.write(f"🔍 {key}:")
+    st.write(f"   st.secrets length: {len(val)}")
+    st.write(f"   os.environ length: {len(env_val)}")
+    # Show first few characters if any
+    if val:
+        st.write(f"   starts with: {val[:5]}...")
+    else:
+        st.warning(f"⚠️ st.secrets[{key}] is empty or missing!")
+
 # Final safety check for the specific error you are seeing
 if not os.environ.get("GITHUB_TOKEN") and not os.environ.get("P2SAMAPA_GITHUB_TOKEN"):
     st.error("❌ Failed. Check GITHUB_TOKEN in Streamlit secrets.")
