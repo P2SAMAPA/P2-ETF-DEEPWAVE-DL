@@ -1,4 +1,7 @@
 # evaluate.py
+# All risk params read from config.py — no CLI args for tsl/z/fee.
+# Wavelet read from training_summary.json (best_wavelet auto-selected during training).
+
 import json
 import os
 import shutil
@@ -8,55 +11,79 @@ from datetime import datetime
 
 import config
 from data_download import load_local
-from preprocess import run_preprocessing
+from preprocess import run_preprocessing, build_features, apply_scaler, load_scaler, \
+                       normalize_etf_columns, flatten_columns
 import model_a, model_b, model_c
+
+TSL_PCT   = config.DEFAULT_TSL_PCT    # 12
+Z_REENTRY = config.DEFAULT_Z_REENTRY  # 0.9
+FEE_BPS   = config.FEE_BPS            # 12
 
 
 # ─── HF download helper ───────────────────────────────────────────────────────
 
 def download_from_hf_if_needed():
-    """Download data + weights from HF Dataset if not present locally."""
     try:
         from huggingface_hub import HfApi, hf_hub_download
         token = config.HF_TOKEN or None
-
-        # Data parquets
         os.makedirs(config.DATA_DIR, exist_ok=True)
         for f in ["etf_price","etf_ret","etf_vol",
                   "bench_price","bench_ret","bench_vol","macro"]:
             local = os.path.join(config.DATA_DIR, f"{f}.parquet")
             if not os.path.exists(local):
                 try:
-                    dl = hf_hub_download(
-                        repo_id=config.HF_DATASET_REPO,
-                        filename=f"data/{f}.parquet",
-                        repo_type="dataset", token=token)
+                    dl = hf_hub_download(repo_id=config.HF_DATASET_REPO,
+                                         filename=f"data/{f}.parquet",
+                                         repo_type="dataset", token=token)
                     shutil.copy(dl, local)
                     print(f"  Downloaded data/{f}.parquet")
                 except Exception as e:
                     print(f"  Warning data/{f}: {e}")
-
-        # Model weights
         os.makedirs(config.MODELS_DIR, exist_ok=True)
         api   = HfApi(token=token)
-        files = api.list_repo_files(
-            repo_id=config.HF_DATASET_REPO,
-            repo_type="dataset", token=token)
+        files = api.list_repo_files(repo_id=config.HF_DATASET_REPO,
+                                    repo_type="dataset", token=token)
         for f in files:
             if f.startswith("models/") and f.endswith((".keras",".pkl",".json")):
                 local = f
                 if not os.path.exists(local):
                     os.makedirs(os.path.dirname(local), exist_ok=True)
                     try:
-                        dl = hf_hub_download(
-                            repo_id=config.HF_DATASET_REPO,
-                            filename=f, repo_type="dataset", token=token)
+                        dl = hf_hub_download(repo_id=config.HF_DATASET_REPO,
+                                             filename=f, repo_type="dataset", token=token)
                         shutil.copy(dl, local)
                         print(f"  Downloaded {f}")
                     except Exception as e:
                         print(f"  Warning {f}: {e}")
     except Exception as e:
         print(f"  WARNING: HF download failed: {e}")
+
+
+# ─── Read best wavelet + lookback from training summary ───────────────────────
+
+def get_training_meta() -> dict:
+    """
+    Returns per-model best_lookback and best_wavelet from training_summary.json.
+    Falls back to config defaults if summary not present.
+    """
+    summary_path = os.path.join(config.MODELS_DIR, "training_summary.json")
+    defaults = {k: {"best_lookback": config.DEFAULT_LOOKBACK,
+                    "best_wavelet":  config.WAVELET}
+                for k in ["model_a","model_b","model_c"]}
+    if not os.path.exists(summary_path):
+        return defaults
+    try:
+        with open(summary_path) as f:
+            s = json.load(f)
+        for k in defaults:
+            if k in s:
+                defaults[k]["best_lookback"] = s[k].get("best_lookback",
+                                                config.DEFAULT_LOOKBACK)
+                defaults[k]["best_wavelet"]  = s[k].get("best_wavelet",
+                                                config.WAVELET)
+    except Exception as e:
+        print(f"  Warning reading training summary: {e}")
+    return defaults
 
 
 # ─── Signal generation ────────────────────────────────────────────────────────
@@ -68,82 +95,60 @@ def raw_signals(model, prep, is_dual=False):
         inputs = [X_te[:, :, :n], X_te[:, :, n:]]
     else:
         inputs = X_te
-    preds = model.predict(inputs, verbose=0)   # (N, 5)
-    # Diagnostic
+    preds    = model.predict(inputs, verbose=0)
     pred_std = preds.std(axis=0).mean()
     print(f"  Raw pred std per ETF: {preds.std(axis=0).round(6)}")
     if pred_std < 1e-4:
-        print(f"  WARNING: Near-uniform predictions (std={pred_std:.6f}) — possible weight/scaler mismatch")
+        print(f"  WARNING: Near-uniform predictions (std={pred_std:.6f})")
     return preds
 
 
 def softmax_probs(preds, temperature=1.0):
-    """
-    Softmax probabilities. Models now output softmax directly (classification).
-    temperature=1.0 = pass-through. Left as parameter for legacy compatibility.
-    """
-    preds = np.array(preds)
-    # If model already outputs softmax (sums to 1), return as-is
+    preds    = np.array(preds)
     row_sums = preds.sum(axis=1)
     if np.allclose(row_sums, 1.0, atol=0.01):
         return np.clip(preds, 0, 1)
-    # Otherwise apply softmax (legacy regression models)
     scaled = preds / (temperature + 1e-8)
-    e = np.exp(scaled - scaled.max(axis=1, keepdims=True))
+    e      = np.exp(scaled - scaled.max(axis=1, keepdims=True))
     return e / e.sum(axis=1, keepdims=True)
 
 
 def compute_z_scores(probs):
-    """
-    Per-row Z-score: how many std devs is the top ETF above the row mean?
-    Returns array of shape (N,)
-    """
-    top   = probs.max(axis=1)                 # (N,)
-    mu    = probs.mean(axis=1)                # (N,)
-    sigma = probs.std(axis=1) + 1e-8          # (N,)
-    return (top - mu) / sigma                 # (N,)
+    top   = probs.max(axis=1)
+    mu    = probs.mean(axis=1)
+    sigma = probs.std(axis=1) + 1e-8
+    return (top - mu) / sigma
 
 
 # ─── TSL backtest ─────────────────────────────────────────────────────────────
 
-def backtest(probs, dates, etf_returns, tbill_series,
-             fee_bps=10, tsl_pct=10.0, z_reentry=1.1):
-    """
-    Day-by-day backtest with TSL + Z-score re-entry.
-    Key fix: TSL fires end-of-day, re-entry checked next day.
-    """
-    z_scores   = compute_z_scores(probs)
-    records    = []
-    in_cash    = False
-    prev_ret   = 0.0
-    prev2_ret  = 0.0
-    last_signal= None
-    tsl_days   = 0   # days spent in CASH after TSL
+def backtest(probs, dates, etf_returns, tbill_series):
+    z_scores    = compute_z_scores(probs)
+    records     = []
+    in_cash     = False
+    prev_ret    = 0.0
+    prev2_ret   = 0.0
+    last_signal = None
+    tsl_days    = 0
 
     for i in range(len(probs)):
         date   = pd.Timestamp(dates[i])
         prob   = probs[i]
         z      = float(z_scores[i])
         top_i  = int(np.argmax(prob))
-        etf    = config.ETFS[top_i]
+        etf    = config.FI_ETFS[top_i]
         conf   = float(prob[top_i])
 
-        # 2-day cumulative return (previous 2 days)
         two_day_cumul_pct = (prev_ret + prev2_ret) * 100
 
-        # ── TSL trigger (must be out of CASH to trigger) ───────────────────
-        if not in_cash and two_day_cumul_pct <= -tsl_pct:
+        if not in_cash and two_day_cumul_pct <= -TSL_PCT:
             in_cash  = True
             tsl_days = 0
-
-        # ── Z-score re-entry (only after at least 1 full CASH day) ────────
-        if in_cash and tsl_days >= 1 and z >= z_reentry:
+        if in_cash and tsl_days >= 1 and z >= Z_REENTRY:
             in_cash = False
-
         if in_cash:
             tsl_days += 1
 
-        # ── Get actual return ─────────────────────────────────────────────
         if date in etf_returns.index:
             if in_cash:
                 tbill_rate = float(tbill_series.get(date, 3.6))
@@ -153,11 +158,11 @@ def backtest(probs, dates, etf_returns, tbill_series,
             else:
                 gross_ret  = float(etf_returns.loc[date, etf]) \
                              if etf in etf_returns.columns else 0.0
-                fee_cost   = (fee_bps / 10000) if etf != last_signal else 0.0
+                fee_cost   = (FEE_BPS / 10000) if etf != last_signal else 0.0
                 gross_ret -= fee_cost
                 mode       = "📈 ETF"
                 signal     = etf
-                last_signal= etf
+                last_signal = etf
         else:
             gross_ret = 0.0
             mode      = "💵 CASH" if in_cash else "📈 ETF"
@@ -176,7 +181,6 @@ def backtest(probs, dates, etf_returns, tbill_series,
 
         prev2_ret = prev_ret
         prev_ret  = gross_ret
-        prev_ret  = gross_ret
 
     df = pd.DataFrame(records)
     df["Cumulative"] = (1 + df["Net_Return"]).cumprod()
@@ -194,28 +198,23 @@ def compute_metrics(bt, bench_ret, tbill_series):
     ann_ret = (total ** (252 / n_days) - 1) * 100
 
     tbill_daily = tbill_series.reindex(dates).ffill().fillna(3.6) / 100 / 252
-    excess  = rets - tbill_daily.values
-    sharpe  = float((excess.mean() / (excess.std() + 1e-8)) * np.sqrt(252))
+    excess      = rets - tbill_daily.values
+    sharpe      = float((excess.mean() / (excess.std() + 1e-8)) * np.sqrt(252))
 
-    cum    = np.cumprod(1 + rets)
-    peak   = np.maximum.accumulate(cum)
-    dd     = (cum - peak) / peak
-    max_dd = float(dd.min()) * 100
+    cum     = np.cumprod(1 + rets)
+    peak    = np.maximum.accumulate(cum)
+    dd      = (cum - peak) / peak
+    max_dd  = float(dd.min()) * 100
     max_daily_dd = float(rets.min()) * 100
 
-    signs  = np.sign(rets)
-    hit_15 = float(pd.Series(signs).rolling(15).apply(
+    hit_15  = float(pd.Series(np.sign(rets)).rolling(15).apply(
                 lambda x: (x > 0).mean()).mean())
 
-    # SPY benchmark
     spy_dates = bench_ret.index.intersection(dates)
     spy_rets  = bench_ret.loc[spy_dates, "SPY"].values \
                 if "SPY" in bench_ret.columns else np.zeros(1)
-    spy_total = float((1 + pd.Series(spy_rets)).prod())
-    spy_ann   = (spy_total ** (252 / max(len(spy_rets), 1)) - 1) * 100
-
-    # CASH days count
-    cash_days = int((bt["Mode"] == "CASH").sum())
+    spy_ann   = ((1 + pd.Series(spy_rets)).prod() **
+                 (252 / max(len(spy_rets), 1)) - 1) * 100
 
     return dict(
         ann_return    = round(ann_ret, 2),
@@ -224,64 +223,32 @@ def compute_metrics(bt, bench_ret, tbill_series):
         max_drawdown  = round(max_dd, 2),
         max_daily_dd  = round(max_daily_dd, 2),
         vs_spy        = round(ann_ret - spy_ann, 2),
-        cash_days     = cash_days,
+        cash_days     = int((bt["Mode"] == "💵 CASH").sum()),
     )
-
-
-# ─── AR(1) baseline ───────────────────────────────────────────────────────────
-
-def ar1_backtest(etf_returns, test_dates):
-    records  = []
-    dates_dt = pd.to_datetime(test_dates)
-    df = etf_returns[etf_returns.index.isin(dates_dt)].copy()
-    prev = df.shift(1).fillna(0)
-    for date, row in df.iterrows():
-        best = prev.loc[date].idxmax()
-        records.append(dict(Date=date, Signal=best,
-                            Net_Return=float(row[best])))
-    out = pd.DataFrame(records)
-    out["Cumulative"] = (1 + out["Net_Return"]).cumprod()
-    return out
 
 
 # ─── Full evaluation ──────────────────────────────────────────────────────────
 
-def run_evaluation(tsl_pct=config.DEFAULT_TSL_PCT,
-                   z_reentry=config.DEFAULT_Z_REENTRY,
-                   fee_bps=10):
-
+def run_evaluation():
     print(f"\n{'='*60}")
-    print(f"  Evaluation — TSL={tsl_pct}%  Z-reentry={z_reentry}σ  "
-          f"Fee={fee_bps}bps")
+    print(f"  [FI] Evaluation")
+    print(f"  TSL={TSL_PCT}%  Z-reentry={Z_REENTRY}σ  Fee={FEE_BPS}bps")
     print(f"{'='*60}")
 
-    # Download data + weights from HF if not available locally
     download_from_hf_if_needed()
 
     data = load_local()
     if not data:
         raise RuntimeError("No data. Run data_download.py first.")
 
-    # Normalize ETF columns
-    from preprocess import normalize_etf_columns, flatten_columns
     etf_ret  = normalize_etf_columns(data["etf_ret"].copy())
-    etf_ret  = etf_ret[[c for c in config.ETFS if c in etf_ret.columns]]
-    bench_ret= normalize_etf_columns(data["bench_ret"].copy())
+    etf_ret  = etf_ret[[c for c in config.FI_ETFS if c in etf_ret.columns]]
+    bench_ret = normalize_etf_columns(data["bench_ret"].copy())
+    macro     = flatten_columns(data["macro"].copy())
+    tbill     = macro["TBILL_3M"] if "TBILL_3M" in macro.columns \
+                else pd.Series(3.6, index=macro.index)
 
-    # T-bill series
-    macro    = flatten_columns(data["macro"].copy())
-    tbill    = macro["TBILL_3M"] if "TBILL_3M" in macro.columns \
-               else pd.Series(3.6, index=macro.index)
-
-    # Best lookbacks from training summary
-    summary_path = os.path.join(config.MODELS_DIR, "training_summary.json")
-    lb_map = {"model_a": 30, "model_b": 30, "model_c": 30}
-    if os.path.exists(summary_path):
-        with open(summary_path) as f:
-            s = json.load(f)
-        for k in lb_map:
-            lb_map[k] = s.get(k, {}).get("best_lookback", 30)
-
+    meta    = get_training_meta()
     results = {}
 
     for tag, module, is_dual in [
@@ -289,214 +256,184 @@ def run_evaluation(tsl_pct=config.DEFAULT_TSL_PCT,
         ("model_b", model_b, False),
         ("model_c", model_c, True),
     ]:
-        lb = lb_map[tag]
-        print(f"\n  Evaluating {tag.upper()} (lb={lb}d)...")
-        prep = run_preprocessing(data, lb)
+        lb      = meta[tag]["best_lookback"]
+        wavelet = meta[tag]["best_wavelet"]
+        print(f"\n  Evaluating {tag.upper()} (lb={lb}d wavelet={wavelet})...")
+
+        prep = run_preprocessing(data, lb, wavelet=wavelet)
 
         try:
             m = module.load_model(lb)
         except Exception as e:
-            print(f"  Could not load {tag}: {e}")
-            continue
+            print(f"  Could not load {tag}: {e}"); continue
 
-        preds = raw_signals(m, prep, is_dual=is_dual)
-        probs = softmax_probs(preds)
-
-        # Check if model is producing meaningful predictions
+        preds    = raw_signals(m, prep, is_dual=is_dual)
+        probs    = softmax_probs(preds)
         prob_std = probs.std(axis=1).mean()
-        print(f"  probs sample (first 3 rows):\n{probs[:3]}")
-        print(f"  z_scores sample: {compute_z_scores(probs[:5])}")
-        print(f"  Mean prob std across ETFs: {prob_std:.4f}  "
-              f"(>0.05 = model discriminating, ~0 = uniform = weights issue)")
+        print(f"  Mean prob std: {prob_std:.4f}")
         if prob_std < 0.01:
-            print(f"  WARNING: Model {tag} outputting near-uniform probabilities!")
-            print(f"  This usually means the model weights are not loaded correctly.")
+            print(f"  WARNING: Near-uniform probabilities — possible weight issue")
 
-        bt = backtest(probs, prep["d_te"], etf_ret, tbill,
-                      fee_bps=fee_bps, tsl_pct=tsl_pct,
-                      z_reentry=z_reentry)
-
-        cash_count = (bt["Mode"] == "CASH").sum()
-        print(f"  CASH days triggered: {cash_count} / {len(bt)}")
-        print(f"  Signals distribution:\n{bt['Signal'].value_counts()}")
+        bt         = backtest(probs, prep["d_te"], etf_ret, tbill)
+        cash_count = (bt["Mode"] == "💵 CASH").sum()
+        print(f"  CASH days: {cash_count}/{len(bt)}")
 
         metrics = compute_metrics(bt, bench_ret, tbill)
-        # Extend audit trail with LIVE recent dates beyond test set
-        # Test set ends at ~10% of total data from end.
-        # We run inference on the most recent 60 trading days too.
+
+        # Live extension — last 60 trading days beyond test set
         live_records = []
         try:
-            from preprocess import build_features, apply_scaler, load_scaler
-            features   = build_features(data)
-            scaler     = load_scaler(lb)
-            recent_dates = features.index[-60:]   # last 60 trading days
+            features     = build_features(data, wavelet=wavelet)
+            scaler       = load_scaler(lb, wavelet=wavelet)
+            recent_dates = features.index[-60:]
             for dt in recent_dates:
                 if dt in prep["d_te"]:
-                    continue   # already in test set
+                    continue
                 idx = features.index.get_loc(dt)
                 if idx < lb:
                     continue
-                window = features.iloc[idx - lb : idx].values.astype(np.float32)
+                window = features.iloc[idx - lb: idx].values.astype(np.float32)
                 X_win  = apply_scaler(window.reshape(1, lb, -1), scaler)
                 if is_dual:
                     n_e = prep["n_etf_features"]
                     inp = [X_win[:, :, :n_e], X_win[:, :, n_e:]]
                 else:
                     inp = X_win
-                raw = m.predict(inp, verbose=0)
-                pr  = softmax_probs(raw)[0]
-                zi  = float((pr.max() - pr.mean()) / (pr.std() + 1e-8))
-                ei  = int(np.argmax(pr))
-                etf_name = config.ETFS[ei]
-                # Get actual return if available
-                if "etf_ret" in data:
-                    from preprocess import normalize_etf_columns
-                    er = normalize_etf_columns(data["etf_ret"].copy())
-                    ec = [c for c in config.ETFS if c in er.columns]
-                    if etf_name in ec and dt in er.index:
-                        actual_ret = float(er.loc[dt, etf_name])
-                    else:
-                        actual_ret = 0.0
-                else:
-                    actual_ret = 0.0
+                raw    = m.predict(inp, verbose=0)
+                pr     = softmax_probs(raw)[0]
+                zi     = float((pr.max() - pr.mean()) / (pr.std() + 1e-8))
+                ei     = int(np.argmax(pr))
+                etf_nm = config.FI_ETFS[ei]
+                er     = normalize_etf_columns(data["etf_ret"].copy())
+                actual = float(er.loc[dt, etf_nm]) \
+                         if etf_nm in er.columns and dt in er.index else 0.0
                 live_records.append(dict(
-                    Date       = str(dt.date()),
-                    Signal     = etf_name,
-                    Confidence = round(float(pr[ei]), 4),
-                    Z_Score    = round(zi, 4),
-                    Two_Day_Cumul_Pct = 0.0,
-                    Mode       = "ETF",
-                    Net_Return = round(actual_ret, 6),
-                    TSL_Triggered = False,
+                    Date=str(dt.date()), Signal=etf_nm,
+                    Confidence=round(float(pr[ei]), 4), Z_Score=round(zi, 4),
+                    Two_Day_Cumul_Pct=0.0, Mode="ETF",
+                    Net_Return=round(actual, 6), TSL_Triggered=False,
                 ))
         except Exception as ex:
             print(f"  Live extension warning: {ex}")
 
-        # Merge test set + live records, sort, take last 30
-        all_rows  = bt.to_dict(orient="records") + live_records
-        all_df    = pd.DataFrame(all_rows)
+        all_rows = bt.to_dict(orient="records") + live_records
+        all_df   = pd.DataFrame(all_rows)
         all_df["Date"] = pd.to_datetime(all_df["Date"])
-        all_df    = all_df.sort_values("Date").drop_duplicates("Date")
-        audit_30  = all_df.tail(30).to_dict(orient="records")
+        all_df   = all_df.sort_values("Date").drop_duplicates("Date")
+        audit_30 = all_df.tail(30).to_dict(orient="records")
 
         results[tag] = dict(
             metrics     = metrics,
             lookback    = lb,
+            wavelet     = wavelet,
             audit_tail  = audit_30,
             all_signals = bt.to_dict(orient="records"),
         )
-        print(f"    Ann={metrics['ann_return']}%  "
-              f"Sharpe={metrics['sharpe']}  "
-              f"MaxDD={metrics['max_drawdown']}%  "
-              f"CashDays={metrics['cash_days']}")
+        print(f"    Ann={metrics['ann_return']}%  Sharpe={metrics['sharpe']}  "
+              f"MaxDD={metrics['max_drawdown']}%  CashDays={metrics['cash_days']}")
 
     # AR(1) baseline
-    prep30   = run_preprocessing(data, 30)
-    ar1_bt   = ar1_backtest(etf_ret, prep30["d_te"])
-    ar1_rets = ar1_bt["Net_Return"].values
-    n        = len(ar1_rets)
-    ar1_ann  = ((1 + pd.Series(ar1_rets)).prod() ** (252/n) - 1) * 100
+    default_wavelet = meta.get("model_a", {}).get("best_wavelet", config.WAVELET)
+    prep30   = run_preprocessing(data, 30, wavelet=default_wavelet)
+    ar1_rets = []
+    etf_ret_full = normalize_etf_columns(data["etf_ret"].copy())
+    etf_ret_full = etf_ret_full[[c for c in config.FI_ETFS if c in etf_ret_full.columns]]
+    prev_df  = etf_ret_full.shift(1).fillna(0)
+    for dt in pd.to_datetime(prep30["d_te"]):
+        if dt in etf_ret_full.index and dt in prev_df.index:
+            best = prev_df.loc[dt].idxmax()
+            ar1_rets.append(float(etf_ret_full.loc[dt, best]))
+    ar1_ann = ((1 + pd.Series(ar1_rets)).prod() **
+               (252 / max(len(ar1_rets), 1)) - 1) * 100
     results["ar1_baseline"] = dict(ann_return=round(float(ar1_ann), 2))
 
     # Benchmarks
     for bench in config.BENCHMARKS:
-        test_dates = prep30["d_te"]
-        b_dates    = bench_ret.index.intersection(pd.to_datetime(test_dates))
-        b_rets     = bench_ret.loc[b_dates, bench].values \
-                     if bench in bench_ret.columns else np.zeros(1)
-        b_total    = (1 + pd.Series(b_rets)).prod()
-        b_ann      = (b_total ** (252 / max(len(b_rets),1)) - 1) * 100
-        b_sh       = (b_rets.mean()/(b_rets.std()+1e-8))*np.sqrt(252)
-        b_cum      = np.cumprod(1 + b_rets)
-        b_peak     = np.maximum.accumulate(b_cum)
-        b_mdd      = float(((b_cum-b_peak)/b_peak).min())*100
-        results[bench] = dict(
-            ann_return   = round(float(b_ann), 2),
-            sharpe       = round(float(b_sh), 3),
-            max_drawdown = round(float(b_mdd), 2),
-        )
+        b_dates = bench_ret.index.intersection(pd.to_datetime(prep30["d_te"]))
+        b_rets  = bench_ret.loc[b_dates, bench].values \
+                  if bench in bench_ret.columns else np.zeros(1)
+        b_ann   = ((1 + pd.Series(b_rets)).prod() **
+                   (252 / max(len(b_rets), 1)) - 1) * 100
+        b_sh    = (b_rets.mean() / (b_rets.std() + 1e-8)) * np.sqrt(252)
+        b_cum   = np.cumprod(1 + b_rets)
+        b_mdd   = float(((b_cum - np.maximum.accumulate(b_cum)) /
+                          np.maximum.accumulate(b_cum)).min()) * 100
+        results[bench] = dict(ann_return=round(float(b_ann), 2),
+                               sharpe=round(float(b_sh), 3),
+                               max_drawdown=round(float(b_mdd), 2))
 
     # Winner
     valid = [k for k in ["model_a","model_b","model_c"] if k in results]
     if valid:
-        winner = max(valid,
-                     key=lambda k: results[k]["metrics"]["ann_return"])
+        winner = max(valid, key=lambda k: results[k]["metrics"]["ann_return"])
         results["winner"] = winner
         print(f"\n  ⭐ WINNER: {winner.upper()} "
               f"({results[winner]['metrics']['ann_return']}%)")
 
     results["evaluated_at"] = datetime.now().isoformat()
-    results["tsl_pct"]      = tsl_pct
-    results["z_reentry"]    = z_reentry
+    results["tsl_pct"]      = TSL_PCT
+    results["z_reentry"]    = Z_REENTRY
+    results["fee_bps"]      = FEE_BPS
 
-    with open("evaluation_results.json","w") as f:
+    with open("evaluation_results.json", "w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"\n  Saved → evaluation_results.json")
 
-    # ── Write date-stamped sweep cache if this is a sweep year ────────────────
+    # ── Sweep cache ────────────────────────────────────────────────────────────
     SWEEP_YEARS = [2008, 2013, 2015, 2017, 2019, 2021]
-    start_yr = results.get("start_year") or (
-        results.get(winner, {}).get("start_year") if winner else None)
-    # Read from training_summary.json
-    if start_yr is None:
-        try:
-            import os as _os
-            summ_path = _os.path.join(config.MODELS_DIR, "training_summary.json")
-            if _os.path.exists(summ_path):
-                with open(summ_path) as _f:
-                    start_yr = json.load(_f).get("start_year")
-        except Exception:
-            pass
+    start_yr    = None
+    try:
+        summ_path = os.path.join(config.MODELS_DIR, "training_summary.json")
+        if os.path.exists(summ_path):
+            with open(summ_path) as _f:
+                start_yr = json.load(_f).get("start_year")
+    except Exception:
+        pass
+
+    winner = results.get("winner")
     if start_yr in SWEEP_YEARS and winner and winner in results:
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-        _date_tag = (_dt.now(_tz.utc) - _td(hours=5)).strftime("%Y%m%d")
+        date_tag   = (_dt.now(_tz.utc) - _td(hours=5)).strftime("%Y%m%d")
         w_metrics  = results[winner].get("metrics", {})
 
-        # Derive next signal from last row of audit_tail or all_signals
-        _next_signal = "?"
+        next_signal = "?"
         try:
-            _audit = results[winner].get("audit_tail") or results[winner].get("all_signals", [])
-            if _audit:
-                _last = _audit[-1]
-                _next_signal = _last.get("Signal_TSL") or _last.get("Signal") or "?"
+            audit = results[winner].get("audit_tail") or \
+                    results[winner].get("all_signals", [])
+            if audit:
+                last = audit[-1]
+                next_signal = last.get("Signal_TSL") or last.get("Signal") or "?"
         except Exception:
             pass
 
-        # Z-score from latest_prediction.json (written by predict.py before evaluate in workflow)
-        # Fall back to 0 if not available
         _z = 0.0
         try:
             if os.path.exists("latest_prediction.json"):
                 with open("latest_prediction.json") as _pf:
                     _pred = json.load(_pf)
-                _preds = _pred.get("predictions", {})
-                _z = float(_preds.get(winner, {}).get("z_score", 0.0) or 0.0)
+                _z = float(_pred.get("predictions", {}).get(winner, {}).get("z_score", 0.0) or 0.0)
         except Exception:
             pass
 
         sweep_payload = {
-            "signal":       _next_signal,
+            "signal":       next_signal,
             "ann_return":   round(float(w_metrics.get("ann_return", 0)) / 100, 6),
             "z_score":      round(_z, 4),
             "sharpe":       round(float(w_metrics.get("sharpe", 0)), 4),
             "max_dd":       round(float(w_metrics.get("max_drawdown", 0)) / 100, 6),
             "winner_model": winner,
             "start_year":   start_yr,
-            "sweep_date":   _date_tag,
+            "sweep_date":   date_tag,
         }
         os.makedirs("sweep", exist_ok=True)
-        _sweep_fname = f"sweep/sweep_{start_yr}_{_date_tag}.json"
-        with open(_sweep_fname, "w") as _sf:
+        sweep_fname = f"sweep/sweep_{start_yr}_{date_tag}.json"
+        with open(sweep_fname, "w") as _sf:
             json.dump(sweep_payload, _sf, indent=2)
-        print(f"  Sweep cache saved → {_sweep_fname}  signal={_next_signal}  z={_z:.3f}")
+        print(f"  Sweep cache → {sweep_fname}  signal={next_signal}  z={_z:.3f}")
+
     return results
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--tsl",  type=float, default=config.DEFAULT_TSL_PCT)
-    parser.add_argument("--z",    type=float, default=config.DEFAULT_Z_REENTRY)
-    parser.add_argument("--fee",  type=float, default=10)
-    args = parser.parse_args()
-    run_evaluation(tsl_pct=args.tsl, z_reentry=args.z, fee_bps=args.fee)
+    # No CLI args — all params hardcoded in config.py
+    run_evaluation()
