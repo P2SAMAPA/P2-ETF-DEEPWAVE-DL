@@ -16,16 +16,31 @@ import plotly.graph_objects as go
 # ─── Streamlit Cloud: load secrets into env before importing config ────────────
 def _bootstrap_secrets():
     try:
-        for key in ["HF_TOKEN", "FRED_API_KEY", "HF_DATASET_REPO",
-                    "P2SAMAPA_GITHUB_TOKEN", "GITHUB_TOKEN"]:
-            if key in st.secrets and not os.environ.get(key):
-                os.environ[key] = st.secrets[key]
-    except Exception:
-        pass
+        # Define the keys to sync from st.secrets to os.environ
+        keys_to_sync = [
+            "HF_TOKEN", 
+            "FRED_API_KEY", 
+            "HF_DATASET_REPO",
+            "P2SAMAPA_GITHUB_TOKEN", 
+            "GITHUB_TOKEN"
+        ]
+        
+        for key in keys_to_sync:
+            if key in st.secrets:
+                # Force update os.environ to ensure it's available globally
+                os.environ[key] = str(st.secrets[key])
+                
+    except Exception as e:
+        st.error(f"Error bootstrapping secrets: {e}")
 
+# Execute the bootstrap immediately
 _bootstrap_secrets()
 
-import config   # noqa: E402 — must come after secrets are injected
+# Final safety check for the specific error you are seeing
+if not os.environ.get("GITHUB_TOKEN") and not os.environ.get("P2SAMAPA_GITHUB_TOKEN"):
+    st.error("❌ Failed. Check GITHUB_TOKEN in Streamlit secrets.")
+    st.info("Ensure your Secrets dashboard has: GITHUB_TOKEN = 'your_token'")
+    st.stop()
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
