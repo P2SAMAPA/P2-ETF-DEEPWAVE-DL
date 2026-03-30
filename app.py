@@ -13,9 +13,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
-
-# Debug: show all secret keys
-st.write("🔍 Debug: available secret keys =", list(st.secrets.keys()))
+from huggingface_hub import hf_hub_download, HfApi  # <-- ADDED missing import
 
 # ─── Streamlit Cloud: load secrets into env before importing config ────────────
 def _bootstrap_secrets():
@@ -40,23 +38,18 @@ def _bootstrap_secrets():
 # Execute the bootstrap immediately
 _bootstrap_secrets()
 
-# After the bootstrap
-for key in ["GITHUB_TOKEN", "P2SAMAPA_GITHUB_TOKEN"]:
-    val = st.secrets.get(key, "")
-    env_val = os.environ.get(key, "")
-    st.write(f"🔍 {key}:")
-    st.write(f"   st.secrets length: {len(val)}")
-    st.write(f"   os.environ length: {len(env_val)}")
-    # Show first few characters if any
-    if val:
-        st.write(f"   starts with: {val[:5]}...")
-    else:
-        st.warning(f"⚠️ st.secrets[{key}] is empty or missing!")
-
 # Final safety check for the specific error you are seeing
 if not os.environ.get("GITHUB_TOKEN") and not os.environ.get("P2SAMAPA_GITHUB_TOKEN"):
     st.error("❌ Failed. Check GITHUB_TOKEN in Streamlit secrets.")
     st.info("Ensure your Secrets dashboard has: GITHUB_TOKEN = 'your_token'")
+    st.stop()
+
+# Ensure config is available
+try:
+    # Just a sanity check – if config is missing, this will raise an ImportError
+    _ = config.DEFAULT_TSL_PCT
+except (ImportError, AttributeError):
+    st.error("❌ config.py is missing or incomplete. Please ensure it's in the repository.")
     st.stop()
 
 # ─── Page config ──────────────────────────────────────────────────────────────
@@ -200,7 +193,6 @@ def trigger_github(start_year: int, workflow: str = "train_models.yml") -> bool:
 
 # ─── HF data loaders ─────────────────────────────────────────────────────────
 def _hf_download(filename: str, force: bool = False):
-    from huggingface_hub import hf_hub_download
     return hf_hub_download(repo_id=_hf_repo(), filename=filename,
                            repo_type="dataset", token=_hf_token() or None,
                            force_download=force)
