@@ -1,4 +1,4 @@
-name: Train Equity Models (A, B, C)
+name: Train Equity Models
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ on:
     # Hardcoded: epochs=80, wavelet=auto, tsl=12%, z_reentry=0.9, fee=12bps
 
 jobs:
-  train_eq_2008:
+  eq_2008:
     if: >
       github.event.inputs.start_year == '' ||
       github.event.inputs.start_year == '2008'
@@ -30,7 +30,7 @@ jobs:
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
       - name: Download data
-        run: &download_data |
+        run: |
           python << 'EOF'
           import shutil, os
           from huggingface_hub import hf_hub_download
@@ -44,21 +44,40 @@ jobs:
                                        repo_type="dataset", token=token, force_download=True)
                   shutil.copy(dl, os.path.join(config.DATA_DIR, f"{f}.parquet"))
                   print(f"✓ {f}")
-              except Exception as e:
-                  print(f"✗ {f}: {e}")
+              except Exception as e: print(f"✗ {f}: {e}")
           EOF
       - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2008
       - run: python predict_equity.py
       - run: python evaluate_equity.py --start_year 2008
-      - name: Push results to HF (batched)
-        run: python .github/scripts/push_eq_results.py --year 2008
+      - run: python .github/scripts/push_eq_results.py --year 2008
 
-  train_eq_2010:
+  eq_2009:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2009'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2009
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2009
+      - run: python .github/scripts/push_eq_results.py --year 2009
+
+  eq_2010:
     if: >
       github.event.inputs.start_year == '' ||
       github.event.inputs.start_year == '2010'
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 340
     env:
       HF_TOKEN:        ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -74,12 +93,54 @@ jobs:
       - run: python evaluate_equity.py --start_year 2010
       - run: python .github/scripts/push_eq_results.py --year 2010
 
-  train_eq_2013:
+  eq_2011:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2011'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2011
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2011
+      - run: python .github/scripts/push_eq_results.py --year 2011
+
+  eq_2012:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2012'
+    runs-on: ubuntu-latest
+    timeout-minutes: 320
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2012
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2012
+      - run: python .github/scripts/push_eq_results.py --year 2012
+
+  eq_2013:
     if: >
       github.event.inputs.start_year == '' ||
       github.event.inputs.start_year == '2013'
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 310
     env:
       HF_TOKEN:        ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -95,12 +156,33 @@ jobs:
       - run: python evaluate_equity.py --start_year 2013
       - run: python .github/scripts/push_eq_results.py --year 2013
 
-  train_eq_2015:
+  eq_2014:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2014'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2014
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2014
+      - run: python .github/scripts/push_eq_results.py --year 2014
+
+  eq_2015:
     if: >
       github.event.inputs.start_year == '' ||
       github.event.inputs.start_year == '2015'
     runs-on: ubuntu-latest
-    timeout-minutes: 270
+    timeout-minutes: 290
     env:
       HF_TOKEN:        ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -116,12 +198,33 @@ jobs:
       - run: python evaluate_equity.py --start_year 2015
       - run: python .github/scripts/push_eq_results.py --year 2015
 
-  train_eq_2017:
+  eq_2016:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2016'
+    runs-on: ubuntu-latest
+    timeout-minutes: 270
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2016
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2016
+      - run: python .github/scripts/push_eq_results.py --year 2016
+
+  eq_2017:
     if: >
       github.event.inputs.start_year == '' ||
       github.event.inputs.start_year == '2017'
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 250
     env:
       HF_TOKEN:        ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -137,12 +240,33 @@ jobs:
       - run: python evaluate_equity.py --start_year 2017
       - run: python .github/scripts/push_eq_results.py --year 2017
 
-  train_eq_2019:
+  eq_2018:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2018'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2018
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2018
+      - run: python .github/scripts/push_eq_results.py --year 2018
+
+  eq_2019:
     if: >
       github.event.inputs.start_year == '' ||
       github.event.inputs.start_year == '2019'
     runs-on: ubuntu-latest
-    timeout-minutes: 210
+    timeout-minutes: 220
     env:
       HF_TOKEN:        ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -158,7 +282,28 @@ jobs:
       - run: python evaluate_equity.py --start_year 2019
       - run: python .github/scripts/push_eq_results.py --year 2019
 
-  train_eq_2021:
+  eq_2020:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2020'
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2020
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2020
+      - run: python .github/scripts/push_eq_results.py --year 2020
+
+  eq_2021:
     if: >
       github.event.inputs.start_year == '' ||
       github.event.inputs.start_year == '2021'
@@ -178,3 +323,87 @@ jobs:
       - run: python predict_equity.py
       - run: python evaluate_equity.py --start_year 2021
       - run: python .github/scripts/push_eq_results.py --year 2021
+
+  eq_2022:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2022'
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2022
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2022
+      - run: python .github/scripts/push_eq_results.py --year 2022
+
+  eq_2023:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2023'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2023
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2023
+      - run: python .github/scripts/push_eq_results.py --year 2023
+
+  eq_2024:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2024'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2024
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2024
+      - run: python .github/scripts/push_eq_results.py --year 2024
+
+  eq_2025:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2025'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2025
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2025
+      - run: python .github/scripts/push_eq_results.py --year 2025
