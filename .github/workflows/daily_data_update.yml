@@ -2,7 +2,9 @@ name: Daily Data Update
 
 on:
   schedule:
-    - cron: "0 2 * * 1-5"   # 2:00 AM UTC, Mon–Fri
+    # Run at 4:00 AM UTC (12:00 AM ET / 11:00 PM ET during DST), Tuesday–Saturday.
+    # This ensures we fetch the previous trading day's data after it's available.
+    - cron: "0 4 * * 2-6"
   workflow_dispatch:
 
 jobs:
