@@ -1,11 +1,11 @@
-name: Train Models
+name: Train FI Models
 
 on:
   workflow_run:
     workflows: ["Daily Data Update"]
     types: [completed]
   schedule:
-    - cron: "0 1 * * 2-6"    # 01:00 UTC daily
+    - cron: "0 1 * * 2-6"
   workflow_dispatch:
     inputs:
       model:
@@ -18,12 +18,12 @@ on:
         default: ""
     # Hardcoded: epochs=80, wavelet=auto, tsl=12%, z_reentry=0.9, fee=12bps
 
-jobs:
-  # ── Parallel job per year ────────────────────────────────────────────────────
-  # Each job: train → predict → evaluate → push results/fi_{year}_{today}.json
-  # Today's file for that year is overwritten; other years' files untouched.
+# Shared step template as an anchor — each job is identical except start_year
+# GitHub Actions doesn't support YAML anchors so steps are repeated per job.
+# Each job: download data → train → predict → evaluate → push results
 
-  train_2008:
+jobs:
+  fi_2008:
     if: >
       github.event_name == 'schedule' ||
       github.event.workflow_run.conclusion == 'success' ||
@@ -40,25 +40,43 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - name: Download data
-        run: python data_download.py --mode incremental
-      - name: Train
-        run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2008
-      - name: Predict
-        run: python predict.py
-      - name: Evaluate
-        run: python evaluate.py --start_year 2008
-      - name: Push results to HF
-        run: python .github/scripts/push_fi_results.py --year 2008
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2008
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2008
+      - run: python .github/scripts/push_fi_results.py --year 2008
 
-  train_2010:
+  fi_2009:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2009'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2009
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2009
+      - run: python .github/scripts/push_fi_results.py --year 2009
+
+  fi_2010:
     if: >
       github.event_name == 'schedule' ||
       github.event.workflow_run.conclusion == 'success' ||
       (github.event_name == 'workflow_dispatch' &&
        (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2010'))
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 340
     env:
       HF_TOKEN:        ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -72,17 +90,62 @@ jobs:
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2010
       - run: python predict.py
       - run: python evaluate.py --start_year 2010
-      - name: Push results to HF
-        run: python .github/scripts/push_fi_results.py --year 2010
+      - run: python .github/scripts/push_fi_results.py --year 2010
 
-  train_2013:
+  fi_2011:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2011'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2011
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2011
+      - run: python .github/scripts/push_fi_results.py --year 2011
+
+  fi_2012:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2012'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 320
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2012
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2012
+      - run: python .github/scripts/push_fi_results.py --year 2012
+
+  fi_2013:
     if: >
       github.event_name == 'schedule' ||
       github.event.workflow_run.conclusion == 'success' ||
       (github.event_name == 'workflow_dispatch' &&
        (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2013'))
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 310
     env:
       HF_TOKEN:        ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -96,17 +159,39 @@ jobs:
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2013
       - run: python predict.py
       - run: python evaluate.py --start_year 2013
-      - name: Push results to HF
-        run: python .github/scripts/push_fi_results.py --year 2013
+      - run: python .github/scripts/push_fi_results.py --year 2013
 
-  train_2015:
+  fi_2014:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2014'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2014
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2014
+      - run: python .github/scripts/push_fi_results.py --year 2014
+
+  fi_2015:
     if: >
       github.event_name == 'schedule' ||
       github.event.workflow_run.conclusion == 'success' ||
       (github.event_name == 'workflow_dispatch' &&
        (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2015'))
     runs-on: ubuntu-latest
-    timeout-minutes: 270
+    timeout-minutes: 290
     env:
       HF_TOKEN:        ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -120,17 +205,39 @@ jobs:
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2015
       - run: python predict.py
       - run: python evaluate.py --start_year 2015
-      - name: Push results to HF
-        run: python .github/scripts/push_fi_results.py --year 2015
+      - run: python .github/scripts/push_fi_results.py --year 2015
 
-  train_2017:
+  fi_2016:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2016'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 270
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2016
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2016
+      - run: python .github/scripts/push_fi_results.py --year 2016
+
+  fi_2017:
     if: >
       github.event_name == 'schedule' ||
       github.event.workflow_run.conclusion == 'success' ||
       (github.event_name == 'workflow_dispatch' &&
        (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2017'))
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 250
     env:
       HF_TOKEN:        ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -144,17 +251,39 @@ jobs:
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2017
       - run: python predict.py
       - run: python evaluate.py --start_year 2017
-      - name: Push results to HF
-        run: python .github/scripts/push_fi_results.py --year 2017
+      - run: python .github/scripts/push_fi_results.py --year 2017
 
-  train_2019:
+  fi_2018:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2018'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2018
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2018
+      - run: python .github/scripts/push_fi_results.py --year 2018
+
+  fi_2019:
     if: >
       github.event_name == 'schedule' ||
       github.event.workflow_run.conclusion == 'success' ||
       (github.event_name == 'workflow_dispatch' &&
        (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2019'))
     runs-on: ubuntu-latest
-    timeout-minutes: 210
+    timeout-minutes: 220
     env:
       HF_TOKEN:        ${{ secrets.HF_TOKEN }}
       HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
@@ -168,10 +297,32 @@ jobs:
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2019
       - run: python predict.py
       - run: python evaluate.py --start_year 2019
-      - name: Push results to HF
-        run: python .github/scripts/push_fi_results.py --year 2019
+      - run: python .github/scripts/push_fi_results.py --year 2019
 
-  train_2021:
+  fi_2020:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2020'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2020
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2020
+      - run: python .github/scripts/push_fi_results.py --year 2020
+
+  fi_2021:
     if: >
       github.event_name == 'schedule' ||
       github.event.workflow_run.conclusion == 'success' ||
@@ -192,5 +343,96 @@ jobs:
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2021
       - run: python predict.py
       - run: python evaluate.py --start_year 2021
-      - name: Push results to HF
-        run: python .github/scripts/push_fi_results.py --year 2021
+      - run: python .github/scripts/push_fi_results.py --year 2021
+
+  fi_2022:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2022'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 160
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2022
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2022
+      - run: python .github/scripts/push_fi_results.py --year 2022
+
+  fi_2023:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2023'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2023
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2023
+      - run: python .github/scripts/push_fi_results.py --year 2023
+
+  fi_2024:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2024'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2024
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2024
+      - run: python .github/scripts/push_fi_results.py --year 2024
+
+  fi_2025:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2025'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2025
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2025
+      - run: python .github/scripts/push_fi_results.py --year 2025
