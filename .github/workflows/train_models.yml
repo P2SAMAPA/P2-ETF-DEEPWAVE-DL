@@ -5,8 +5,7 @@ on:
     workflows: ["Daily Data Update"]
     types: [completed]
   schedule:
-    - cron: "0 1 * * 2-6"    # 01:00 UTC — daily consensus sweep
-    - cron: "0 0 * * 2-6"    # 00:00 UTC — wipe previous day sweep cache
+    - cron: "0 1 * * 2-6"    # 01:00 UTC daily
   workflow_dispatch:
     inputs:
       model:
@@ -14,244 +13,22 @@ on:
         required: false
         default: "all"
       start_year:
-        description: "Start year for training data"
-        required: false
-        default: "2008"
-      sweep_mode:
-        description: "Comma-separated sweep years e.g. 2008,2013,2015 (blank = single run)"
+        description: "Single start year — leave blank to run ALL years in parallel"
         required: false
         default: ""
-    # Hardcoded in config.py — not exposed here:
-    #   epochs=80, wavelet=auto-selected, tsl=12%, z_reentry=0.9, fee=12bps
+    # Hardcoded: epochs=80, wavelet=auto, tsl=12%, z_reentry=0.9, fee=12bps
 
 jobs:
-  # ── 00:00 UTC: wipe previous day's sweep cache from HF Dataset ─────────────
-  wipe_sweep_cache:
+  # ── Parallel job per year ────────────────────────────────────────────────────
+  # Each job: train → predict → evaluate → push results/fi_{year}_{today}.json
+  # Today's file for that year is overwritten; other years' files untouched.
+
+  train_2008:
     if: >
-      github.event_name == 'schedule' &&
-      github.event.schedule == '0 0 * * 2-6'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-    steps:
-      - name: Delete stale sweep files from HF Dataset
-        run: |
-          pip install huggingface_hub -q
-          python3 - <<'PYEOF'
-          import os
-          from datetime import datetime, timezone, timedelta
-          from huggingface_hub import HfApi
-
-          api   = HfApi()
-          token = os.environ["HF_TOKEN"]
-          repo  = os.environ["HF_DATASET_REPO"]
-          today = (datetime.now(timezone.utc) - timedelta(hours=5)).strftime("%Y%m%d")
-
-          try:
-              files = list(api.list_repo_files(repo_id=repo, repo_type="dataset", token=token))
-          except Exception as e:
-              print(f"Could not list files: {e}"); files = []
-
-          deleted = 0
-          for f in files:
-              fname = f.split("/")[-1]
-              if fname.startswith("sweep_") and fname.endswith(".json"):
-                  parts = fname.replace(".json","").split("_")
-                  if len(parts) == 3 and parts[2] != today:
-                      try:
-                          api.delete_file(path_in_repo=f, repo_id=repo,
-                                          repo_type="dataset", token=token,
-                                          commit_message=f"Wipe stale sweep: {fname}")
-                          print(f"Deleted {fname}"); deleted += 1
-                      except Exception as e:
-                          print(f"Could not delete {fname}: {e}")
-          print(f"Wiped {deleted} stale sweep files")
-          PYEOF
-
-  # ── Single-year train ───────────────────────────────────────────────────────
-  train:
-    runs-on: ubuntu-latest
-    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
       (github.event_name == 'workflow_dispatch' &&
-       (github.event.inputs.sweep_mode == '' || github.event.inputs.sweep_mode == null)) ||
-      github.event.workflow_run.conclusion == 'success'
-    timeout-minutes: 360
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Download latest data from HF Dataset
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: |
-          python - <<'EOF'
-          from huggingface_hub import hf_hub_download
-          import os, shutil, config
-
-          os.makedirs("data", exist_ok=True)
-          for f in ["etf_price","etf_ret","etf_vol",
-                    "bench_price","bench_ret","bench_vol","macro"]:
-              try:
-                  path = hf_hub_download(repo_id=config.HF_DATASET_REPO,
-                                         filename=f"data/{f}.parquet",
-                                         repo_type="dataset", token=config.HF_TOKEN)
-                  shutil.copy(path, f"data/{f}.parquet")
-                  print(f"  ✓ {f}.parquet")
-              except Exception as e:
-                  print(f"  ✗ {f}: {e}")
-          EOF
-
-      - name: Incremental data update
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-        run: |
-          python data_download.py --mode incremental
-          python data_upload_hf.py
-
-      - name: Train all models (wavelet auto-selected)
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-        run: |
-          python train.py \
-            --model      "${{ github.event.inputs.model || 'all' }}" \
-            --start_year "${{ github.event.inputs.start_year || '2008' }}"
-
-      - name: Run evaluation
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-        run: python evaluate.py
-
-      - name: Run prediction
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-        run: python predict.py
-
-      - name: Push weights + results to HF Dataset
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: python data_upload_hf.py --weights
-
-      - name: Push json results to HF Dataset
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: |
-          python - <<'EOF'
-          import os
-          from huggingface_hub import HfApi, CommitOperationAdd
-          import config
-
-          api = HfApi(token=config.HF_TOKEN)
-          ops = []
-          for f in ["latest_prediction.json", "evaluation_results.json"]:
-              if os.path.exists(f):
-                  ops.append(CommitOperationAdd(path_in_repo=f, path_or_fileobj=f))
-                  print(f"  Adding {f}")
-          if ops:
-              api.create_commit(repo_id=config.HF_DATASET_REPO, repo_type="dataset",
-                                operations=ops,
-                                commit_message="[auto] Update prediction + evaluation results")
-              print(f"  Pushed {len(ops)} json files")
-          EOF
-
-      - name: Commit results to GitHub (json only)
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add evaluation_results.json latest_prediction.json \
-                  models/training_summary.json 2>/dev/null || true
-          git diff --cached --quiet || \
-            git commit -m "[auto] Results update — $(date -u +%Y-%m-%d)"
-          git push || true
-
-      - name: Push sweep JSON to HF Dataset
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: |
-          python3 - <<'PYEOF'
-          import os, glob
-          from huggingface_hub import HfApi, CommitOperationAdd
-
-          token   = os.environ["HF_TOKEN"]
-          repo_id = os.environ["HF_DATASET_REPO"]
-          api     = HfApi()
-          ops     = [
-              CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}",
-                                  path_or_fileobj=open(f, "rb").read())
-              for f in glob.glob("sweep/sweep_*.json")
-          ]
-          if ops:
-              api.create_commit(repo_id=repo_id, repo_type="dataset", token=token,
-                                operations=ops,
-                                commit_message=f"Sweep results: {[o.path_in_repo for o in ops]}")
-              print(f"Pushed {len(ops)} sweep file(s)")
-          else:
-              print("No sweep files to push")
-          PYEOF
-
-      - name: Push code + results to HF Space (no binary weights)
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          python - <<'EOF'
-          from huggingface_hub import HfApi, CommitOperationAdd
-          import os, config
-
-          api = HfApi(token=config.HF_TOKEN)
-          space_files = [
-              "app.py", "config.py", "preprocess.py",
-              "model_a.py", "model_b.py", "model_c.py",
-              "predict.py", "evaluate.py", "daily_update.py",
-              "data_download.py", "data_upload_hf.py",
-              "requirements.txt", "Dockerfile",
-              "evaluation_results.json",
-              "latest_prediction.json",
-              "models/training_summary.json",
-          ]
-          ops = [CommitOperationAdd(path_in_repo=f, path_or_fileobj=f)
-                 for f in space_files if os.path.exists(f)]
-          if ops:
-              api.create_commit(repo_id=config.HF_SPACE_REPO, repo_type="space",
-                                operations=ops,
-                                commit_message="[auto] Deploy code + results to HF Space")
-              print(f"Pushed {len(ops)} files to HF Space")
-          EOF
-
-      - name: Done
-        run: echo "✅ Training pipeline complete."
-
-
-  # ── Sweep jobs (parallel, one per start year) ────────────────────────────────
-  # All hardcoded params removed — train.py reads from config.py:
-  #   wavelet=auto, tsl=12%, z_reentry=0.9, fee=12bps, epochs=80
-
-  sweep_2008:
-    if: >
-      (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 2-6') ||
-      (github.event_name == 'workflow_dispatch' && contains(github.event.inputs.sweep_mode, '2008'))
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2008'))
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
@@ -263,33 +40,47 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
-      - run: python train.py --model all --start_year 2008
-      - run: python predict.py
-      - run: python evaluate.py
-      - name: Push sweep to HF
-        run: |
-          if [ -z "$HF_DATASET_REPO" ]; then echo "ERROR: HF_DATASET_REPO not set"; exit 1; fi
-          python3 - <<PYEOF
-          import os, glob
-          from huggingface_hub import HfApi, CommitOperationAdd
-          token = os.environ["HF_TOKEN"]
-          repo  = os.environ["HF_DATASET_REPO"]
-          api   = HfApi()
-          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}",
-                   path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops:
-              api.create_commit(repo_id=repo, repo_type="dataset", token=token,
-                                operations=ops, commit_message="Sweep 2008")
-              print(f"Pushed {len(ops)} file(s)")
-          else:
-              print("No sweep files found")
-          PYEOF
+      - name: Download data
+        run: python data_download.py --mode incremental
+      - name: Train
+        run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2008
+      - name: Predict
+        run: python predict.py
+      - name: Evaluate
+        run: python evaluate.py --start_year 2008
+      - name: Push results to HF
+        run: python .github/scripts/push_fi_results.py --year 2008
 
-  sweep_2013:
+  train_2010:
     if: >
-      (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 2-6') ||
-      (github.event_name == 'workflow_dispatch' && contains(github.event.inputs.sweep_mode, '2013'))
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2010'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2010
+      - run: python predict.py
+      - run: python evaluate.py --start_year 2010
+      - name: Push results to HF
+        run: python .github/scripts/push_fi_results.py --year 2010
+
+  train_2013:
+    if: >
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2013'))
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
@@ -302,32 +93,18 @@ jobs:
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
       - run: python data_download.py --mode incremental
-      - run: python train.py --model all --start_year 2013
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2013
       - run: python predict.py
-      - run: python evaluate.py
-      - name: Push sweep to HF
-        run: |
-          if [ -z "$HF_DATASET_REPO" ]; then echo "ERROR: HF_DATASET_REPO not set"; exit 1; fi
-          python3 - <<PYEOF
-          import os, glob
-          from huggingface_hub import HfApi, CommitOperationAdd
-          token = os.environ["HF_TOKEN"]
-          repo  = os.environ["HF_DATASET_REPO"]
-          api   = HfApi()
-          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}",
-                   path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops:
-              api.create_commit(repo_id=repo, repo_type="dataset", token=token,
-                                operations=ops, commit_message="Sweep 2013")
-              print(f"Pushed {len(ops)} file(s)")
-          else:
-              print("No sweep files found")
-          PYEOF
+      - run: python evaluate.py --start_year 2013
+      - name: Push results to HF
+        run: python .github/scripts/push_fi_results.py --year 2013
 
-  sweep_2015:
+  train_2015:
     if: >
-      (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 2-6') ||
-      (github.event_name == 'workflow_dispatch' && contains(github.event.inputs.sweep_mode, '2015'))
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2015'))
     runs-on: ubuntu-latest
     timeout-minutes: 270
     env:
@@ -340,32 +117,18 @@ jobs:
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
       - run: python data_download.py --mode incremental
-      - run: python train.py --model all --start_year 2015
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2015
       - run: python predict.py
-      - run: python evaluate.py
-      - name: Push sweep to HF
-        run: |
-          if [ -z "$HF_DATASET_REPO" ]; then echo "ERROR: HF_DATASET_REPO not set"; exit 1; fi
-          python3 - <<PYEOF
-          import os, glob
-          from huggingface_hub import HfApi, CommitOperationAdd
-          token = os.environ["HF_TOKEN"]
-          repo  = os.environ["HF_DATASET_REPO"]
-          api   = HfApi()
-          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}",
-                   path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops:
-              api.create_commit(repo_id=repo, repo_type="dataset", token=token,
-                                operations=ops, commit_message="Sweep 2015")
-              print(f"Pushed {len(ops)} file(s)")
-          else:
-              print("No sweep files found")
-          PYEOF
+      - run: python evaluate.py --start_year 2015
+      - name: Push results to HF
+        run: python .github/scripts/push_fi_results.py --year 2015
 
-  sweep_2017:
+  train_2017:
     if: >
-      (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 2-6') ||
-      (github.event_name == 'workflow_dispatch' && contains(github.event.inputs.sweep_mode, '2017'))
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2017'))
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -378,32 +141,18 @@ jobs:
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
       - run: python data_download.py --mode incremental
-      - run: python train.py --model all --start_year 2017
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2017
       - run: python predict.py
-      - run: python evaluate.py
-      - name: Push sweep to HF
-        run: |
-          if [ -z "$HF_DATASET_REPO" ]; then echo "ERROR: HF_DATASET_REPO not set"; exit 1; fi
-          python3 - <<PYEOF
-          import os, glob
-          from huggingface_hub import HfApi, CommitOperationAdd
-          token = os.environ["HF_TOKEN"]
-          repo  = os.environ["HF_DATASET_REPO"]
-          api   = HfApi()
-          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}",
-                   path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops:
-              api.create_commit(repo_id=repo, repo_type="dataset", token=token,
-                                operations=ops, commit_message="Sweep 2017")
-              print(f"Pushed {len(ops)} file(s)")
-          else:
-              print("No sweep files found")
-          PYEOF
+      - run: python evaluate.py --start_year 2017
+      - name: Push results to HF
+        run: python .github/scripts/push_fi_results.py --year 2017
 
-  sweep_2019:
+  train_2019:
     if: >
-      (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 2-6') ||
-      (github.event_name == 'workflow_dispatch' && contains(github.event.inputs.sweep_mode, '2019'))
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2019'))
     runs-on: ubuntu-latest
     timeout-minutes: 210
     env:
@@ -416,32 +165,18 @@ jobs:
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
       - run: python data_download.py --mode incremental
-      - run: python train.py --model all --start_year 2019
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2019
       - run: python predict.py
-      - run: python evaluate.py
-      - name: Push sweep to HF
-        run: |
-          if [ -z "$HF_DATASET_REPO" ]; then echo "ERROR: HF_DATASET_REPO not set"; exit 1; fi
-          python3 - <<PYEOF
-          import os, glob
-          from huggingface_hub import HfApi, CommitOperationAdd
-          token = os.environ["HF_TOKEN"]
-          repo  = os.environ["HF_DATASET_REPO"]
-          api   = HfApi()
-          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}",
-                   path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops:
-              api.create_commit(repo_id=repo, repo_type="dataset", token=token,
-                                operations=ops, commit_message="Sweep 2019")
-              print(f"Pushed {len(ops)} file(s)")
-          else:
-              print("No sweep files found")
-          PYEOF
+      - run: python evaluate.py --start_year 2019
+      - name: Push results to HF
+        run: python .github/scripts/push_fi_results.py --year 2019
 
-  sweep_2021:
+  train_2021:
     if: >
-      (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 2-6') ||
-      (github.event_name == 'workflow_dispatch' && contains(github.event.inputs.sweep_mode, '2021'))
+      github.event_name == 'schedule' ||
+      github.event.workflow_run.conclusion == 'success' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.start_year == '' || github.event.inputs.start_year == '2021'))
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -454,24 +189,8 @@ jobs:
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
       - run: python data_download.py --mode incremental
-      - run: python train.py --model all --start_year 2021
+      - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2021
       - run: python predict.py
-      - run: python evaluate.py
-      - name: Push sweep to HF
-        run: |
-          if [ -z "$HF_DATASET_REPO" ]; then echo "ERROR: HF_DATASET_REPO not set"; exit 1; fi
-          python3 - <<PYEOF
-          import os, glob
-          from huggingface_hub import HfApi, CommitOperationAdd
-          token = os.environ["HF_TOKEN"]
-          repo  = os.environ["HF_DATASET_REPO"]
-          api   = HfApi()
-          ops   = [CommitOperationAdd(path_in_repo=f"sweep/{os.path.basename(f)}",
-                   path_or_fileobj=open(f,"rb").read()) for f in glob.glob("sweep/sweep_*.json")]
-          if ops:
-              api.create_commit(repo_id=repo, repo_type="dataset", token=token,
-                                operations=ops, commit_message="Sweep 2021")
-              print(f"Pushed {len(ops)} file(s)")
-          else:
-              print("No sweep files found")
-          PYEOF
+      - run: python evaluate.py --start_year 2021
+      - name: Push results to HF
+        run: python .github/scripts/push_fi_results.py --year 2021
