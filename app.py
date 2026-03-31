@@ -1,14 +1,10 @@
 # app.py — P2-ETF-DEEPWAVE-DL
-# Architecture:
-#   - Scans HF Dataset results/ folder for fi_{year}_{date}.json and eq_{year}_{date}.json
-#   - Single-year tab: slider over available years → show that year's signal + metrics
-#   - Consensus tab: all available years → weighted consensus auto-computed
-#   - No separate sweep/ folder needed
+# Scans HF Dataset results/ for fi_{year}_{date}.json and eq_{year}_{date}.json
+# Single-year tab: select_slider over available years
+# Consensus tab: all available years, auto-computed weighted consensus
+# All metrics stored and displayed in % (ann_return=12.5 means 12.5%)
 
-import json
-import os
-import re
-import requests
+import json, os, re, requests
 from datetime import datetime, date, timedelta
 
 import numpy as np
@@ -16,7 +12,7 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
-# ─── Streamlit Cloud secrets ──────────────────────────────────────────────────
+
 def _bootstrap_secrets():
     try:
         for key in ["HF_TOKEN","FRED_API_KEY","HF_DATASET_REPO",
@@ -27,7 +23,7 @@ def _bootstrap_secrets():
         pass
 
 _bootstrap_secrets()
-import config   # noqa: E402
+import config  # noqa: E402
 
 st.set_page_config(page_title="P2-ETF-DEEPWAVE-DL", page_icon="🧠",
                    layout="wide", initial_sidebar_state="expanded")
@@ -118,7 +114,11 @@ def trigger_github(start_year, workflow="train_models.yml"):
     if not token: return False
     url = (f"https://api.github.com/repos/{config.GITHUB_REPO}"
            f"/actions/workflows/{workflow}/dispatches")
-    r = requests.post(url, json={"ref":"main","inputs":{"model":"all","start_year":str(start_year)}},
+    payload = {"ref":"main","inputs":{
+        "model":"all",
+        "start_year": "" if start_year == "All years" else str(start_year)
+    }}
+    r = requests.post(url, json=payload,
                       headers={"Authorization":f"token {token}",
                                "Accept":"application/vnd.github+json"})
     return r.status_code == 204
@@ -129,9 +129,8 @@ def trigger_github(start_year, workflow="train_models.yml"):
 @st.cache_data(ttl=300)
 def scan_available_years(prefix: str) -> dict:
     """
-    Scan HF Dataset results/ for files matching {prefix}_{year}_{date}.json.
-    Returns {year: (date_str, hf_filename)} keeping only the most recent date per year.
-    prefix: 'fi' or 'eq'
+    Scans HF Dataset results/ for {prefix}_{year}_{date}.json files.
+    Returns {year: (date_str, hf_path)} keeping only the most recent date per year.
     """
     pattern = re.compile(rf"^results/{prefix}_(\d{{4}})_(\d{{8}})\.json$")
     best = {}
@@ -148,12 +147,11 @@ def scan_available_years(prefix: str) -> dict:
                     best[year] = (date_str, f)
     except Exception as e:
         st.sidebar.caption(f"⚠️ Scan error: {e}")
-    return best   # {year: (date_str, hf_path)}
+    return best
 
 
 @st.cache_data(ttl=300)
 def load_year_result(hf_path: str) -> dict:
-    """Download and parse one result JSON file from HF."""
     try:
         from huggingface_hub import hf_hub_download
         local = hf_hub_download(repo_id=_hf_repo(), filename=hf_path,
@@ -166,25 +164,27 @@ def load_year_result(hf_path: str) -> dict:
         return {}
 
 
-# ─── Consensus calculation ────────────────────────────────────────────────────
+# ─── Consensus ────────────────────────────────────────────────────────────────
 
 def compute_consensus(year_results: dict) -> dict:
     """
     year_results: {year: result_dict}
-    Each result_dict must have consensus_signal, consensus_ann_return,
-    consensus_z_score, consensus_sharpe, consensus_max_dd.
+    consensus_ann_return and consensus_max_dd are stored as % values (e.g. 12.5, -8.3).
+    The scoring uses raw % values — normalisation handles the scale.
     """
     rows = []
     for yr, r in year_results.items():
         if not r or "consensus_signal" not in r:
             continue
+        ann   = float(r.get("consensus_ann_return", 0))
+        max_dd = float(r.get("consensus_max_dd", 0))
         rows.append({
             "year":       yr,
             "signal":     r["consensus_signal"],
-            "ann_return": r.get("consensus_ann_return", 0.0),
-            "z_score":    r.get("consensus_z_score", 0.0),
-            "sharpe":     r.get("consensus_sharpe", 0.0),
-            "max_dd":     r.get("consensus_max_dd", 0.0),
+            "ann_return": ann,          # e.g. 12.5 (%)
+            "z_score":    float(r.get("consensus_z_score", 0)),
+            "sharpe":     float(r.get("consensus_sharpe", 0)),
+            "max_dd":     max_dd,       # e.g. -8.3 (%)
         })
     if not rows:
         return {}
@@ -203,22 +203,27 @@ def compute_consensus(year_results: dict) -> dict:
         e = row["signal"]
         etf_agg.setdefault(e, {"years":[],"scores":[],"returns":[],
                                 "zs":[],"sharpes":[],"dds":[]})
-        for k, v in [("years",row["year"]),("scores",row["wtd"]),
-                     ("returns",row["ann_return"]),("zs",row["z_score"]),
-                     ("sharpes",row["sharpe"]),("dds",row["max_dd"])]:
-            etf_agg[e][k].append(v)
+        etf_agg[e]["years"].append(row["year"])
+        etf_agg[e]["scores"].append(row["wtd"])
+        etf_agg[e]["returns"].append(row["ann_return"])
+        etf_agg[e]["zs"].append(row["z_score"])
+        etf_agg[e]["sharpes"].append(row["sharpe"])
+        etf_agg[e]["dds"].append(row["max_dd"])
 
     total = sum(sum(v["scores"]) for v in etf_agg.values()) + 1e-9
     summary = {}
     for e, v in etf_agg.items():
         cs = sum(v["scores"])
-        summary[e] = dict(cum_score=round(cs,4), score_share=round(cs/total,3),
-                          n_years=len(v["years"]), years=v["years"],
-                          avg_return=round(float(np.mean(v["returns"])),4),
-                          avg_z=round(float(np.mean(v["zs"])),3),
-                          avg_sharpe=round(float(np.mean(v["sharpes"])),3),
-                          avg_max_dd=round(float(np.mean(v["dds"])),4))
-
+        summary[e] = dict(
+            cum_score   = round(cs, 4),
+            score_share = round(cs / total, 3),
+            n_years     = len(v["years"]),
+            years       = v["years"],
+            avg_return  = round(float(np.mean(v["returns"])), 2),  # in %
+            avg_z       = round(float(np.mean(v["zs"])), 3),
+            avg_sharpe  = round(float(np.mean(v["sharpes"])), 3),
+            avg_max_dd  = round(float(np.mean(v["dds"])), 2),      # in %
+        )
     winner = max(summary, key=lambda e: summary[e]["cum_score"])
     return {"winner":winner, "etf_summary":summary,
             "per_year":df.to_dict("records"), "n_years":len(rows)}
@@ -242,19 +247,20 @@ def apply_tsl(audit, tbill=3.6):
             net_rets.append(round(tbill/100/252, 6))
         else:
             modes.append("📈 ETF"); signals.append(row.get("Signal","—"))
-            net_rets.append(float(row.get("Net_Return",0.0)))
+            net_rets.append(float(row.get("Net_Return", 0.0)))
         prev2, prev = prev, net_rets[-1]
     df = df.copy()
     df["Mode"] = modes; df["Signal_TSL"] = signals; df["Net_TSL"] = net_rets
     return df
 
 
-# ─── Shared renderers ─────────────────────────────────────────────────────────
+# ─── Shared render helpers ────────────────────────────────────────────────────
 
 def render_prob_pills(probs, top_etf, etf_colors):
     if not probs: return
-    cols = st.columns(min(len(probs), 7))
-    for i, (etf, p) in enumerate(sorted(probs.items(), key=lambda x: -x[1])):
+    sorted_p = sorted(probs.items(), key=lambda x: -x[1])
+    cols = st.columns(min(len(sorted_p), 7))
+    for i, (etf, p) in enumerate(sorted_p):
         if i >= len(cols): break
         with cols[i]:
             is_top = etf == top_etf
@@ -288,26 +294,22 @@ def render_model_cards(result, winner, in_cash, colors=("#00bfa5","#7b8ff7","#f8
               <div style="font-size:11px;letter-spacing:2px;font-weight:600;
                           color:{color};margin-bottom:10px;">{label}{w_tag}</div>
               <div style="font-size:26px;font-weight:700;margin-bottom:6px;">{sig}</div>
-              <div style="font-size:12px;color:#aaa;">
-                Conf: <span style="color:{color};font-weight:600;">
-                  {"CASH" if in_cash else f"{conf:.1%}"}
-                </span>
-              </div>
+              <div style="font-size:12px;color:#aaa;">Conf:
+                <span style="color:{color};font-weight:600;">
+                {"CASH" if in_cash else f"{conf:.1%}"}</span></div>
               <div style="font-size:11px;color:#666;margin-top:4px;">
-                Z={z_v:.2f}σ &nbsp;·&nbsp; lb={lb}d &nbsp;·&nbsp;
-                <span class="wavelet-pill">{wav}</span>
+                Z={z_v:.2f}σ · lb={lb}d · <span class="wavelet-pill">{wav}</span>
               </div>
             </div>""", unsafe_allow_html=True)
 
 
 def render_consensus_section(year_results, etf_colors, universe_label):
     if not year_results:
-        st.info("No results available yet. Trigger training from the sidebar.")
+        st.info("No results available. Trigger training from the sidebar.")
         return
-
     consensus = compute_consensus(year_results)
     if not consensus:
-        st.warning("Could not compute consensus — check that result files contain consensus fields.")
+        st.warning("Could not compute consensus.")
         return
 
     winner_etf = consensus["winner"]
@@ -315,9 +317,10 @@ def render_consensus_section(year_results, etf_colors, universe_label):
     win_color  = etf_colors.get(winner_etf, "#0066cc")
     score_pct  = w_info["score_share"] * 100
     split_sig  = w_info["score_share"] < 0.40
-    sig_label  = "⚠️ Split Signal" if split_sig else "✅ Clear Consensus"
     n_years    = consensus["n_years"]
+    sig_label  = "⚠️ Split Signal" if split_sig else "✅ Clear Consensus"
 
+    # avg_return and avg_max_dd are already in % — display directly
     st.markdown(f"""
     <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);
                 border:2px solid {win_color};border-radius:16px;
@@ -334,7 +337,7 @@ def render_consensus_section(year_results, etf_colors, universe_label):
         <div><div style="font-size:11px;color:#aaa;">Avg Return</div>
           <div style="font-size:20px;font-weight:700;
                       color:{'#00b894' if w_info['avg_return']>0 else '#d63031'};">
-            {w_info['avg_return']*100:.1f}%</div></div>
+            {w_info['avg_return']:.2f}%</div></div>
         <div><div style="font-size:11px;color:#aaa;">Avg Z</div>
           <div style="font-size:20px;font-weight:700;color:#74b9ff;">
             {w_info['avg_z']:.2f}σ</div></div>
@@ -343,11 +346,10 @@ def render_consensus_section(year_results, etf_colors, universe_label):
             {w_info['avg_sharpe']:.2f}</div></div>
         <div><div style="font-size:11px;color:#aaa;">Avg MaxDD</div>
           <div style="font-size:20px;font-weight:700;color:#fd79a8;">
-            {w_info['avg_max_dd']*100:.1f}%</div></div>
+            {w_info['avg_max_dd']:.2f}%</div></div>
       </div>
     </div>""", unsafe_allow_html=True)
 
-    # Runner-ups
     others = sorted([(e,v) for e,v in consensus["etf_summary"].items()
                      if e != winner_etf], key=lambda x: -x[1]["cum_score"])
     parts  = [f'<span style="color:{etf_colors.get(e,"#888")};font-weight:600;">{e}</span>'
@@ -385,23 +387,26 @@ def render_consensus_section(year_results, etf_colors, universe_label):
                 text=[etf], textposition="top center", name=etf, showlegend=False,
                 hovertemplate=(f"<b>{etf}</b><br>Year: {row['year']}<br>"
                                f"Z: {row['z_score']:.2f}σ<br>"
-                               f"Return: {row['ann_return']*100:.1f}%<extra></extra>")))
+                               f"Return: {row['ann_return']:.2f}%<extra></extra>")))
         fig2.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.3)")
         fig2.update_layout(template="plotly_dark", height=340,
                            xaxis_title="Start Year", yaxis_title="Z-Score (σ)",
                            margin=dict(t=20,b=20))
         st.plotly_chart(fig2, use_container_width=True)
 
-    # Per-year table
+    # Per-year table — values already in %, display directly
     st.subheader("📋 Per-Year Breakdown")
     tbl = []
     for row in sorted(consensus["per_year"], key=lambda r: r["year"]):
-        tbl.append({"Start Year":row["year"], "Signal":row["signal"],
-                    "Wtd Score":round(row["wtd"],3),
-                    "Z-Score":f"{row['z_score']:.2f}σ",
-                    "Ann. Return":f"{row['ann_return']*100:.2f}%",
-                    "Sharpe":f"{row['sharpe']:.2f}",
-                    "Max Drawdown":f"{row['max_dd']*100:.2f}%"})
+        tbl.append({
+            "Start Year":  row["year"],
+            "Signal":      row["signal"],
+            "Wtd Score":   round(row["wtd"], 3),
+            "Z-Score":     f"{row['z_score']:.2f}σ",
+            "Ann. Return": f"{row['ann_return']:.2f}%",   # already in %
+            "Sharpe":      f"{row['sharpe']:.2f}",
+            "Max Drawdown":f"{row['max_dd']:.2f}%",       # already in %
+        })
     tbl_df = pd.DataFrame(tbl)
 
     def _style_sig(val):
@@ -414,55 +419,34 @@ def render_consensus_section(year_results, etf_colors, universe_label):
         except: return ""
 
     st.dataframe(tbl_df.style.applymap(_style_sig, subset=["Signal"])
-                            .applymap(_style_ret, subset=["Ann. Return"])
+                            .applymap(_style_ret, subset=["Ann. Return","Max Drawdown"])
                             .hide(axis="index"),
-                 use_container_width=True, height=280)
+                 use_container_width=True, height=min(40*len(tbl)+60, 600))
 
 
-def render_single_year_tab(year_results, selected_year, universe, etf_colors):
-    if not year_results:
-        st.info("No results available yet. Trigger training from the sidebar.")
-        return
-
-    result = year_results.get(selected_year, {})
+def render_single_year_tab(result, selected_year, universe, etf_colors):
     if not result:
         st.warning(f"No data for {selected_year}. Trigger training for this year.")
         return
 
-    winner   = result.get("winner","model_a")
-    tbill    = 3.6
-    in_cash  = False   # TSL state shown from latest prediction file
-    next_td  = current_signal_date()
-
-    w        = result.get(winner, {})
-    signal   = w.get("latest_signal","—")
-    conf     = float(w.get("latest_confidence",0))
-    z_val    = float(w.get("latest_z_score",0))
-    wavelet  = w.get("wavelet", config.WAVELET)
-    lb       = w.get("lookback", config.DEFAULT_LOOKBACK)
-    metrics  = w.get("metrics",{})
-    probs    = w.get("latest_probs",{})
-
-    # Check TSL from live prediction file if available
-    try:
-        pred_file = ("latest_prediction.json" if universe == "fi"
-                     else "latest_prediction_equity.json")
-        if os.path.exists(pred_file):
-            with open(pred_file) as f:
-                pred = json.load(f)
-            tsl_s   = pred.get("tsl_status",{})
-            tbill   = pred.get("tbill_rate", 3.6)
-            in_cash = tsl_s.get("in_cash", False)
-    except Exception:
-        pass
-
+    winner  = result.get("winner","model_a")
+    tbill   = 3.6
+    in_cash = False
+    next_td = current_signal_date()
+    w       = result.get(winner, {})
+    signal  = w.get("latest_signal","—")
+    conf    = float(w.get("latest_confidence",0))
+    z_val   = float(w.get("latest_z_score",0))
+    wavelet = w.get("wavelet", config.WAVELET)
+    lb      = w.get("lookback", config.DEFAULT_LOOKBACK)
+    metrics = w.get("metrics",{})
+    probs   = w.get("latest_probs",{})
     uni_label = "FI" if universe == "fi" else "Equity"
     card_cls  = "hero-card" if universe == "fi" else "hero-card-eq"
 
     st.markdown(f'<div class="alert-blue">🎯 <b>{uni_label} — Start Year: {selected_year}</b>'
                 f' &nbsp;·&nbsp; <b>Wavelet:</b> <span class="wavelet-pill">{wavelet}</span>'
-                f' (auto) &nbsp;·&nbsp; <b>Lookback:</b> {lb}d'
-                f' &nbsp;·&nbsp; <b>T-bill:</b> {tbill:.2f}%</div>',
+                f' &nbsp;·&nbsp; <b>Lookback:</b> {lb}d</div>',
                 unsafe_allow_html=True)
     st.markdown(f'<div class="alert-yellow">🛡️ TSL: <b>−{TSL_PCT}%</b>'
                 f' &nbsp;·&nbsp; Re-entry Z ≥ <b>{Z_REENTRY}σ</b>'
@@ -506,7 +490,6 @@ def render_single_year_tab(year_results, selected_year, universe, etf_colors):
         m4.metric("📉 Max Drawdown",  f"{metrics.get('max_drawdown',0):.2f}%")
         m5.metric("⚠️ Max Daily DD",  f"{metrics.get('max_daily_dd',0):.2f}%")
 
-    # Cumulative return chart
     st.markdown("---")
     st.markdown(f"### 📈 Cumulative Return (trained from {selected_year})")
     fig = go.Figure()
@@ -529,18 +512,20 @@ def render_single_year_tab(year_results, selected_year, universe, etf_colors):
                           plot_bgcolor="white", paper_bgcolor="white")
         st.plotly_chart(fig, use_container_width=True)
 
-    # Audit trail
     st.markdown("---")
-    st.markdown(f"### 📋 Audit Trail (last 30 days)")
+    st.markdown("### 📋 Audit Trail (last 30 days)")
     audit = result.get(winner,{}).get("audit_tail",[])
     if audit:
         df_a = apply_tsl(audit, tbill)
         disp = df_a[["Date","Signal_TSL","Confidence","Z_Score","Net_TSL","Mode"]].copy()
         disp.columns = ["Date","Signal","Confidence","Z Score","Net Return","Mode"]
         disp["Date"]       = pd.to_datetime(disp["Date"], format="mixed").dt.strftime("%Y-%m-%d")
-        disp["Confidence"] = disp["Confidence"].apply(lambda x: f"{float(x):.1%}" if isinstance(x,(int,float)) else x)
-        disp["Z Score"]    = disp["Z Score"].apply(lambda x: f"{float(x):.2f}" if isinstance(x,(int,float)) else x)
-        disp["Net Return"] = disp["Net Return"].apply(lambda x: f"+{x*100:.2f}%" if float(x)>=0 else f"{x*100:.2f}%")
+        disp["Confidence"] = disp["Confidence"].apply(
+            lambda x: f"{float(x):.1%}" if isinstance(x,(int,float)) else x)
+        disp["Z Score"]    = disp["Z Score"].apply(
+            lambda x: f"{float(x):.2f}" if isinstance(x,(int,float)) else x)
+        disp["Net Return"] = disp["Net Return"].apply(
+            lambda x: f"+{x*100:.2f}%" if float(x)>=0 else f"{x*100:.2f}%")
         st.dataframe(disp, use_container_width=True, hide_index=True)
 
 
@@ -569,25 +554,24 @@ with st.sidebar:
 
     st.divider()
     st.markdown("### 🚀 Retrain")
-    retrain_year = st.selectbox("Start year to retrain",
-                                options=["All years"] +
-                                        list(range(config.START_YEAR_MIN, config.START_YEAR_MAX+1)),
-                                index=0)
+    retrain_year = st.selectbox(
+        "Start year",
+        options=["All years"] + list(range(2008, 2026)),
+        index=0,
+    )
     has_token = bool(_gh_token())
 
     if st.button("🧠 Retrain FI", use_container_width=True, type="primary"):
-        year_arg = "" if retrain_year == "All years" else str(retrain_year)
         if has_token:
-            ok = trigger_github(year_arg or 2008, "train_models.yml")
+            ok = trigger_github(retrain_year, "train_models.yml")
             if ok: st.success("✅ FI retraining triggered!")
             else:  st.error("❌ Failed. Check GITHUB_TOKEN.")
         else:
             st.info("Add `P2SAMAPA_GITHUB_TOKEN` to Streamlit Cloud secrets.")
 
     if st.button("🚀 Retrain Equity", use_container_width=True):
-        year_arg = "" if retrain_year == "All years" else str(retrain_year)
         if has_token:
-            ok = trigger_github(year_arg or 2008, "train_equity_models.yml")
+            ok = trigger_github(retrain_year, "train_equity_models.yml")
             if ok: st.success("✅ Equity retraining triggered!")
             else:  st.error("❌ Failed.")
         else:
@@ -603,9 +587,8 @@ st.markdown("# 🧠 P2-ETF-DEEPWAVE-DL")
 st.caption("Option A: Wavelet-CNN-LSTM · Option B: Wavelet-Attention-CNN-LSTM · "
            "Option C: Wavelet-Parallel-Dual-Stream-CNN-LSTM")
 
-# Scan available years for both universes
 with st.spinner("Scanning available results..."):
-    fi_years = scan_available_years("fi")   # {year: (date_str, hf_path)}
+    fi_years = scan_available_years("fi")
     eq_years = scan_available_years("eq")
 
 tab_fi, tab_fi_cons, tab_eq, tab_eq_cons = st.tabs([
@@ -615,44 +598,39 @@ tab_fi, tab_fi_cons, tab_eq, tab_eq_cons = st.tabs([
     "🔄 Equity Consensus",
 ])
 
-# ── FI Signal ─────────────────────────────────────────────────────────────────
 with tab_fi:
     if not fi_years:
-        st.warning("No FI results found on HF Dataset. Trigger training from the sidebar.")
+        st.warning("No FI results found. Trigger training from the sidebar.")
     else:
         available_fi = sorted(fi_years.keys())
-        default_idx  = len(available_fi) - 1   # most recent year as default
         selected_fi  = st.select_slider(
-            "📅 Training Start Year",
+            "📅 Training Start Year (FI)",
             options=available_fi,
-            value=available_fi[default_idx],
+            value=available_fi[-1],
             key="fi_year_slider",
         )
-        st.caption(f"Showing results from model trained starting **{selected_fi}** "
-                   f"· last updated {fi_years[selected_fi][0]}")
-
+        st.caption(f"Model trained on data from **{selected_fi}** onwards · "
+                   f"last updated {fi_years[selected_fi][0]}")
         result_fi = load_year_result(fi_years[selected_fi][1])
-        render_single_year_tab(
-            {selected_fi: result_fi}, selected_fi, "fi", ETF_COLORS_FI)
+        render_single_year_tab(result_fi, selected_fi, "fi", ETF_COLORS_FI)
 
-# ── FI Consensus ──────────────────────────────────────────────────────────────
 with tab_fi_cons:
     st.subheader("🔄 FI — Multi-Year Consensus")
-    st.markdown(f"Aggregates signals from **all {len(fi_years)} trained start years** "
-                f"into a weighted consensus.  \n"
+    st.markdown(f"Aggregates signals from all **{len(fi_years)} trained start years** "
+                "into a weighted consensus.  \n"
                 "**Score:** 40% Return · 20% Z · 20% Sharpe · 20% (–MaxDD)")
     if fi_years:
-        st.caption(f"Available years: {', '.join(str(y) for y in sorted(fi_years.keys()))}")
-        with st.spinner("Loading all FI year results..."):
-            all_fi = {yr: load_year_result(path) for yr, (_, path) in fi_years.items()}
+        st.caption(f"Years: {', '.join(str(y) for y in sorted(fi_years.keys()))}")
+        with st.spinner("Loading all FI results..."):
+            all_fi = {yr: load_year_result(path)
+                      for yr, (_, path) in fi_years.items()}
         render_consensus_section(all_fi, ETF_COLORS_FI, "Fixed Income")
     else:
         st.info("No FI results found. Trigger training from the sidebar.")
 
-# ── Equity Signal ─────────────────────────────────────────────────────────────
 with tab_eq:
     if not eq_years:
-        st.warning("No Equity results found on HF Dataset. Trigger training from the sidebar.")
+        st.warning("No Equity results found. Trigger training from the sidebar.")
     else:
         available_eq = sorted(eq_years.keys())
         selected_eq  = st.select_slider(
@@ -661,28 +639,26 @@ with tab_eq:
             value=available_eq[-1],
             key="eq_year_slider",
         )
-        st.caption(f"Showing results from equity model trained starting **{selected_eq}** "
-                   f"· last updated {eq_years[selected_eq][0]}")
-
+        st.caption(f"Model trained on data from **{selected_eq}** onwards · "
+                   f"last updated {eq_years[selected_eq][0]}")
         result_eq = load_year_result(eq_years[selected_eq][1])
-        render_single_year_tab(
-            {selected_eq: result_eq}, selected_eq, "eq", ETF_COLORS_EQ)
+        render_single_year_tab(result_eq, selected_eq, "eq", ETF_COLORS_EQ)
 
-# ── Equity Consensus ──────────────────────────────────────────────────────────
 with tab_eq_cons:
     st.subheader("🔄 Equity — Multi-Year Consensus")
-    st.markdown(f"Aggregates signals from **all {len(eq_years)} trained start years** "
+    st.markdown(f"Aggregates signals from all **{len(eq_years)} trained start years** "
                 "into a weighted consensus.  \n"
                 "**Score:** 40% Return · 20% Z · 20% Sharpe · 20% (–MaxDD)")
     if eq_years:
-        st.caption(f"Available years: {', '.join(str(y) for y in sorted(eq_years.keys()))}")
-        with st.spinner("Loading all Equity year results..."):
-            all_eq = {yr: load_year_result(path) for yr, (_, path) in eq_years.items()}
+        st.caption(f"Years: {', '.join(str(y) for y in sorted(eq_years.keys()))}")
+        with st.spinner("Loading all Equity results..."):
+            all_eq = {yr: load_year_result(path)
+                      for yr, (_, path) in eq_years.items()}
         render_consensus_section(all_eq, ETF_COLORS_EQ, "Equity")
     else:
-        st.info("No Equity results found. Trigger equity training from the sidebar.")
+        st.info("No Equity results found. Trigger training from the sidebar.")
 
 st.markdown("---")
 st.caption(f"P2-ETF-DEEPWAVE-DL · HF: {config.HF_DATASET_REPO} · "
            f"TSL: {TSL_PCT}% · Z-reentry: {Z_REENTRY}σ · Fee: {FEE_BPS}bps · "
-           f"Last refresh: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
+           f"Refresh: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
