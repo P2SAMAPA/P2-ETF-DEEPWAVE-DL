@@ -4,217 +4,177 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: "Model(s) to train: all | a | b | c | a,b etc."
+        description: "Model(s): all | a | b | c"
         required: false
         default: "all"
       start_year:
-        description: "Training start year (e.g. 2008, 2015)"
+        description: "Single start year — leave blank to run ALL years in parallel"
         required: false
-        default: "2008"
-    # Hardcoded in config.py — not exposed here:
-    #   epochs=80, wavelet=auto, tsl=12%, z_reentry=0.9, fee=12bps
+        default: ""
+    # Hardcoded: epochs=80, wavelet=auto, tsl=12%, z_reentry=0.9, fee=12bps
 
 jobs:
-  train-equity:
+  train_eq_2008:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2008'
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # wavelet sweep: 4 wavelets × 3 lookbacks × 3 models
-
+    timeout-minutes: 360
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Download latest data from HF Dataset
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: |
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - name: Download data
+        run: &download_data |
           python << 'EOF'
           import shutil, os
           from huggingface_hub import hf_hub_download
           import config
-
           token = os.environ.get("HF_TOKEN")
           os.makedirs(config.DATA_DIR, exist_ok=True)
-          for f in ["etf_price","etf_ret","etf_vol",
-                    "bench_price","bench_ret","bench_vol","macro"]:
+          for f in ["etf_price","etf_ret","etf_vol","bench_price","bench_ret","bench_vol","macro"]:
               try:
                   dl = hf_hub_download(repo_id=config.HF_DATASET_REPO,
                                        filename=f"data/{f}.parquet",
-                                       repo_type="dataset", token=token,
-                                       force_download=True)
+                                       repo_type="dataset", token=token, force_download=True)
                   shutil.copy(dl, os.path.join(config.DATA_DIR, f"{f}.parquet"))
-                  print(f"✓ data/{f}.parquet")
+                  print(f"✓ {f}")
               except Exception as e:
                   print(f"✗ {f}: {e}")
           EOF
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2008
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2008
+      - name: Push results to HF (batched)
+        run: python .github/scripts/push_eq_results.py --year 2008
 
-      - name: Train equity models (wavelet auto-selected)
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-        run: |
-          python train_equity.py \
-            --model      "${{ github.event.inputs.model }}" \
-            --start_year ${{ github.event.inputs.start_year }}
+  train_eq_2010:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2010'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2010
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2010
+      - run: python .github/scripts/push_eq_results.py --year 2010
 
-      - name: Push equity weights to HF Dataset (batched to avoid 504)
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: |
-          python << 'EOF'
-          import glob, os, time
-          from huggingface_hub import HfApi, CommitOperationAdd
-          import config
+  train_eq_2013:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2013'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2013
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2013
+      - run: python .github/scripts/push_eq_results.py --year 2013
 
-          token = os.environ.get("HF_TOKEN")
-          api   = HfApi(token=token)
+  train_eq_2015:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2015'
+    runs-on: ubuntu-latest
+    timeout-minutes: 270
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2015
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2015
+      - run: python .github/scripts/push_eq_results.py --year 2015
 
-          # Collect all equity weight files
-          files = (
-              glob.glob(os.path.join(config.MODELS_DIR, "model_*_eq", "**", "*.keras"),
-                        recursive=True) +
-              glob.glob(os.path.join(config.MODELS_DIR, "scaler_eq_*.pkl")) +
-              [os.path.join(config.MODELS_DIR, "training_summary_equity.json")]
-          )
-          files = [f for f in files if os.path.exists(f)]
-          print(f"Total equity files to push: {len(files)}")
+  train_eq_2017:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2017'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2017
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2017
+      - run: python .github/scripts/push_eq_results.py --year 2017
 
-          # Push in batches of 10 files to avoid 504 timeout
-          BATCH_SIZE = 10
-          for i in range(0, len(files), BATCH_SIZE):
-              batch = files[i:i + BATCH_SIZE]
-              ops   = [CommitOperationAdd(path_in_repo=f, path_or_fileobj=f)
-                       for f in batch]
-              retries = 3
-              for attempt in range(retries):
-                  try:
-                      api.create_commit(
-                          repo_id=config.HF_DATASET_REPO, repo_type="dataset",
-                          operations=ops,
-                          commit_message=f"[auto] Equity weights batch {i//BATCH_SIZE + 1}",
-                      )
-                      print(f"✓ Batch {i//BATCH_SIZE + 1}: pushed {len(batch)} files")
-                      break
-                  except Exception as e:
-                      print(f"  Attempt {attempt+1} failed: {e}")
-                      if attempt < retries - 1:
-                          time.sleep(30)   # wait before retry
-                      else:
-                          print(f"  Skipping batch after {retries} failures")
-              time.sleep(5)   # brief pause between batches
-          EOF
+  train_eq_2019:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2019'
+    runs-on: ubuntu-latest
+    timeout-minutes: 210
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2019
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2019
+      - run: python .github/scripts/push_eq_results.py --year 2019
 
-      - name: Run equity prediction
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-        run: python predict_equity.py
-
-      - name: Run equity evaluation
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-          FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
-        run: python evaluate_equity.py
-
-      - name: Push prediction + evaluation + sweep to HF Dataset
-        env:
-          HF_TOKEN:        ${{ secrets.HF_TOKEN }}
-          HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
-        run: |
-          python << 'EOF'
-          import os, glob, time
-          from huggingface_hub import HfApi, CommitOperationAdd
-          import config
-
-          token = os.environ.get("HF_TOKEN")
-          api   = HfApi(token=token)
-
-          files_to_push = []
-
-          # JSON results
-          for f in ["latest_prediction_equity.json",
-                    "evaluation_results_equity.json"]:
-              if os.path.exists(f):
-                  files_to_push.append((f, f))
-
-          # Equity sweep files (eq_sweep_*.json)
-          for f in glob.glob("sweep/eq_sweep_*.json"):
-              files_to_push.append((f, f"sweep/{os.path.basename(f)}"))
-
-          if files_to_push:
-              ops = [CommitOperationAdd(path_in_repo=repo_path,
-                                        path_or_fileobj=local_path)
-                     for local_path, repo_path in files_to_push]
-              for attempt in range(3):
-                  try:
-                      api.create_commit(
-                          repo_id=config.HF_DATASET_REPO, repo_type="dataset",
-                          operations=ops,
-                          commit_message="[auto] Equity prediction + evaluation + sweep",
-                      )
-                      print(f"✓ Pushed {len(ops)} result file(s)")
-                      for lp, rp in files_to_push:
-                          print(f"  → {rp}")
-                      break
-                  except Exception as e:
-                      print(f"  Attempt {attempt+1} failed: {e}")
-                      if attempt < 2:
-                          time.sleep(30)
-          else:
-              print("No result files to push")
-          EOF
-
-      - name: Summary
-        run: |
-          python << 'EOF'
-          import json, os, config
-
-          # Training summary
-          path = os.path.join(config.MODELS_DIR, "training_summary_equity.json")
-          if os.path.exists(path):
-              s = json.load(open(path))
-              print(f"Trained at:   {s.get('trained_at')}")
-              print(f"Best wavelet: {s.get('best_wavelet')} (auto-selected)")
-              print(f"ETFs ({s.get('n_classes')}): {s.get('etfs')}")
-              for k in ["model_a","model_b","model_c"]:
-                  if k in s:
-                      print(f"  {k}: lb={s[k].get('best_lookback')}d "
-                            f"wavelet={s[k].get('best_wavelet')} "
-                            f"val_acc={s[k].get('best_val_acc',0):.4f}")
-
-          # Prediction summary
-          if os.path.exists("latest_prediction_equity.json"):
-              p = json.load(open("latest_prediction_equity.json"))
-              print(f"\nSignal: {p.get('final_signal')}  "
-                    f"as_of: {p.get('as_of_date')}")
-
-          # Evaluation summary
-          if os.path.exists("evaluation_results_equity.json"):
-              e = json.load(open("evaluation_results_equity.json"))
-              winner = e.get("winner","?")
-              m = e.get(winner, {}).get("metrics", {})
-              print(f"\n⭐ Winner: {winner}")
-              print(f"  Ann Return: {m.get('ann_return',0)}%")
-              print(f"  Sharpe:     {m.get('sharpe',0)}")
-              print(f"  Max DD:     {m.get('max_drawdown',0)}%")
-
-          # Sweep files written
-          import glob
-          sweeps = glob.glob("sweep/eq_sweep_*.json")
-          print(f"\nEquity sweep files written: {len(sweeps)}")
-          for sf in sweeps:
-              print(f"  {sf}")
-          EOF
+  train_eq_2021:
+    if: >
+      github.event.inputs.start_year == '' ||
+      github.event.inputs.start_year == '2021'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      HF_TOKEN:        ${{ secrets.HF_TOKEN }}
+      HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
+      FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: "pip"}
+      - run: pip install -r requirements.txt
+      - run: python data_download.py --mode incremental
+      - run: python train_equity.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2021
+      - run: python predict_equity.py
+      - run: python evaluate_equity.py --start_year 2021
+      - run: python .github/scripts/push_eq_results.py --year 2021
