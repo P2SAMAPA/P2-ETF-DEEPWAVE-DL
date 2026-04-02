@@ -1,88 +1,21 @@
 {
-  "as_of_date": "2026-04-01",
+  "as_of_date": "2026-04-02",
   "winner_model": "model_a",
-  "final_signal": "GDX",
-  "final_confidence": 0.0961,
+  "final_signal": "\u2014",
+  "final_confidence": null,
   "tsl_status": {
-    "two_day_cumul_pct": 6.74,
+    "two_day_cumul_pct": 11.25,
     "tsl_triggered": false,
     "in_cash": false,
-    "current_z": 2.256,
+    "current_z": 0.0,
     "z_reentry": 0.9,
     "tsl_pct": 12
   },
-  "tbill_rate": 3.62,
-  "predictions": {
-    "model_a": {
-      "model": "model_a",
-      "lookback": 45,
-      "wavelet": "db2",
-      "signal": "GDX",
-      "confidence": 0.0961,
-      "z_score": 2.256,
-      "probabilities": {
-        "QQQ": 0.0791,
-        "XLK": 0.0777,
-        "XLF": 0.0868,
-        "XLE": 0.0802,
-        "XLV": 0.0853,
-        "XLI": 0.076,
-        "XLY": 0.0829,
-        "XLP": 0.0892,
-        "XLU": 0.0849,
-        "XME": 0.0856,
-        "GDX": 0.0961,
-        "IWM": 0.0763
-      }
-    },
-    "model_b": {
-      "model": "model_b",
-      "lookback": 45,
-      "wavelet": "haar",
-      "signal": "XLE",
-      "confidence": 0.1553,
-      "z_score": 2.094,
-      "probabilities": {
-        "QQQ": 0.0399,
-        "XLK": 0.0412,
-        "XLF": 0.0602,
-        "XLE": 0.1553,
-        "XLV": 0.0877,
-        "XLI": 0.0602,
-        "XLY": 0.067,
-        "XLP": 0.085,
-        "XLU": 0.11,
-        "XME": 0.1169,
-        "GDX": 0.1206,
-        "IWM": 0.056
-      }
-    },
-    "model_c": {
-      "model": "model_c",
-      "lookback": 60,
-      "wavelet": "sym5",
-      "signal": "XLU",
-      "confidence": 0.1946,
-      "z_score": 1.467,
-      "probabilities": {
-        "QQQ": 0.0179,
-        "XLK": 0.0215,
-        "XLF": 0.0953,
-        "XLE": 0.1317,
-        "XLV": 0.025,
-        "XLI": 0.0039,
-        "XLY": 0.0013,
-        "XLP": 0.0003,
-        "XLU": 0.1946,
-        "XME": 0.1515,
-        "GDX": 0.1826,
-        "IWM": 0.1743
-      }
-    }
-  },
-  "trained_from_year": 2018,
-  "trained_wavelet": "db2",
-  "trained_at": "2026-04-01T06:33:20.989462",
+  "tbill_rate": 3.61,
+  "predictions": {},
+  "trained_from_year": 2010,
+  "trained_wavelet": "sym5",
+  "trained_at": "2026-04-02T04:24:46.613734",
   "universe": "equity",
   "etfs": [
     "QQQ",
