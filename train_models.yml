@@ -371,7 +371,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model all --epochs 80 --start_year 2013 --wavelet db4
       - run: python predict.py --tsl 10 --z 1.1
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
@@ -457,7 +457,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model all --epochs 80 --start_year 2017 --wavelet db4
       - run: python predict.py --tsl 10 --z 1.1
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
@@ -500,7 +500,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model all --epochs 80 --start_year 2019 --wavelet db4
       - run: python predict.py --tsl 10 --z 1.1
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
@@ -543,7 +543,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model all --epochs 80 --start_year 2021 --wavelet db4
       - run: python predict.py --tsl 10 --z 1.1
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
