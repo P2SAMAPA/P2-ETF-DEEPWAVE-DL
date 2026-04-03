@@ -16,7 +16,7 @@ from tensorflow.keras import layers
 from sklearn.utils.class_weight import compute_class_weight
 
 import config
-from data_download import load_local
+from data_utils import load_local
 from preprocess_equity import run_preprocessing
 
 os.makedirs(config.MODELS_DIR, exist_ok=True)
