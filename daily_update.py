@@ -14,7 +14,7 @@ from datetime import datetime
 from huggingface_hub import HfApi, hf_hub_download, CommitOperationAdd
 
 import config
-from data_download import incremental_update
+from data_utils import incremental_update
 from predict import run_predict
 
 
