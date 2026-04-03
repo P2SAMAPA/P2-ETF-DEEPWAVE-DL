@@ -156,7 +156,7 @@ jobs:
           HF_DATASET_REPO: ${{ secrets.HF_DATASET_REPO }}
           FRED_API_KEY:    ${{ secrets.FRED_API_KEY }}
         run: |
-          python data_download.py --mode incremental
+          python data_utils.py --mode incremental
           python data_upload_hf.py
 
       - name: Train all models
@@ -284,7 +284,7 @@ jobs:
               "app.py", "config.py", "preprocess.py",
               "model_a.py", "model_b.py", "model_c.py",
               "predict.py", "evaluate.py", "daily_update.py",
-              "data_download.py", "data_upload_hf.py",
+              "data_utils.py", "data_upload_hf.py",
               "requirements.txt", "Dockerfile",
               "evaluation_results.json",
               "latest_prediction.json",
@@ -328,7 +328,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model all --epochs 80 --start_year 2008 --wavelet db4
       - run: python predict.py --tsl 10 --z 1.1
       - run: python evaluate.py --tsl 10 --z 1.1 --fee 10
