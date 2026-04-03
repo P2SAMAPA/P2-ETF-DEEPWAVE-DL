@@ -334,6 +334,52 @@ def load_local():
 
 
 # ─────────────────────────────────────────────────────────────
+# HF DOWNLOAD — Unconditional pull from HuggingFace Dataset
+# ─────────────────────────────────────────────────────────────
+
+def download_from_hf():
+    """
+    Pull all parquet datasets directly from HuggingFace Dataset repo.
+    Bypasses trading-day guard — safe to call on weekends/holidays.
+    Used by train/equity workflows so fresh runners always have data.
+    """
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        raise RuntimeError("huggingface_hub not installed. Add it to requirements.txt.")
+
+    token = config.HF_TOKEN or None
+    os.makedirs(config.DATA_DIR, exist_ok=True)
+
+    succeeded, failed = [], []
+    for name in DATASETS:
+        filename = f"data/{name}.parquet"
+        try:
+            dl = hf_hub_download(
+                repo_id=config.HF_DATASET_REPO,
+                filename=filename,
+                repo_type="dataset",
+                token=token,
+                force_download=True,
+            )
+            dest = os.path.join(config.DATA_DIR, f"{name}.parquet")
+            import shutil
+            shutil.copy(dl, dest)
+            logger.info(f"✓ {filename}")
+            succeeded.append(name)
+        except Exception as e:
+            logger.warning(f"✗ {filename}: {e}")
+            failed.append(name)
+
+    if not succeeded:
+        raise RuntimeError("HF download failed for all datasets — check HF_TOKEN and HF_DATASET_REPO.")
+    if failed:
+        logger.warning(f"⚠️ Missing from HF: {failed} — training will proceed with available data.")
+
+    return load_local()
+
+
+# ─────────────────────────────────────────────────────────────
 # FULL REBUILD LOGIC
 # ─────────────────────────────────────────────────────────────
 
@@ -458,11 +504,13 @@ def seed():
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["seed", "incremental"], default="incremental")
+    parser.add_argument("--mode", choices=["seed", "incremental", "download"], default="incremental")
     args = parser.parse_args()
 
     if args.mode == "seed":
         seed()
+    elif args.mode == "download":
+        download_from_hf()
     else:
         incremental_update()
     logger.info("\nDataset build complete.")
