@@ -9,7 +9,7 @@ import pandas as pd
 from datetime import datetime, timezone, timedelta
 
 import config
-from data_download import load_local
+from data_utils import load_local
 from preprocess_equity import run_preprocessing, build_features, apply_scaler, \
                               load_scaler, normalize_etf_columns, flatten_columns
 
