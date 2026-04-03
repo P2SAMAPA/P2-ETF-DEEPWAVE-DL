@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 import config
-from data_download import load_local
+from data_utils import load_local
 from preprocess_equity import build_features, apply_scaler, load_scaler, \
                               normalize_etf_columns, flatten_columns
 
