@@ -40,7 +40,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2008
       - run: python predict.py
       - run: python evaluate.py --start_year 2008
@@ -63,7 +63,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2009
       - run: python predict.py
       - run: python evaluate.py --start_year 2009
@@ -86,7 +86,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2010
       - run: python predict.py
       - run: python evaluate.py --start_year 2010
@@ -109,7 +109,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2011
       - run: python predict.py
       - run: python evaluate.py --start_year 2011
@@ -132,7 +132,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2012
       - run: python predict.py
       - run: python evaluate.py --start_year 2012
@@ -155,7 +155,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2013
       - run: python predict.py
       - run: python evaluate.py --start_year 2013
@@ -178,7 +178,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2014
       - run: python predict.py
       - run: python evaluate.py --start_year 2014
@@ -201,7 +201,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2015
       - run: python predict.py
       - run: python evaluate.py --start_year 2015
@@ -224,7 +224,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2016
       - run: python predict.py
       - run: python evaluate.py --start_year 2016
@@ -247,7 +247,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2017
       - run: python predict.py
       - run: python evaluate.py --start_year 2017
@@ -270,7 +270,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2018
       - run: python predict.py
       - run: python evaluate.py --start_year 2018
@@ -293,7 +293,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2019
       - run: python predict.py
       - run: python evaluate.py --start_year 2019
@@ -316,7 +316,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2020
       - run: python predict.py
       - run: python evaluate.py --start_year 2020
@@ -339,7 +339,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2021
       - run: python predict.py
       - run: python evaluate.py --start_year 2021
@@ -362,7 +362,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2022
       - run: python predict.py
       - run: python evaluate.py --start_year 2022
@@ -385,7 +385,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2023
       - run: python predict.py
       - run: python evaluate.py --start_year 2023
@@ -408,7 +408,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2024
       - run: python predict.py
       - run: python evaluate.py --start_year 2024
@@ -431,7 +431,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11", cache: "pip"}
       - run: pip install -r requirements.txt
-      - run: python data_download.py --mode incremental
+      - run: python data_utils.py --mode incremental
       - run: python train.py --model "${{ github.event.inputs.model || 'all' }}" --start_year 2025
       - run: python predict.py
       - run: python evaluate.py --start_year 2025
