@@ -78,7 +78,7 @@ def run_training(models_to_train: list, epochs: int, start_year: int = None):
 
     data = load_local()
     if not data:
-        raise RuntimeError("No data found. Run data_download.py first.")
+        raise RuntimeError("No data found. Run data_utils.py first.")
 
     training_summary = {}
 
