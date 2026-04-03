@@ -25,7 +25,7 @@ jobs:
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           HF_TOKEN:     ${{ secrets.HF_TOKEN }}
-        run: python data_download.py --mode seed
+        run: python data_utils.py --mode seed
 
       - name: Push data to Hugging Face
         env:
