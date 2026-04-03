@@ -18,7 +18,7 @@ import config
 import model_a
 import model_b
 import model_c
-from data_download import load_local
+from data_utils import load_local
 from preprocess import run_preprocessing   # FI preprocessor (uses config.ETFS = FI_ETFS)
 
 os.makedirs(config.MODELS_DIR, exist_ok=True)
