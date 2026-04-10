@@ -1,17 +1,17 @@
 {
-  "as_of_date": "2026-04-09",
+  "as_of_date": "2026-04-10",
   "winner_model": "model_b",
   "final_signal": "\u2014",
   "final_confidence": null,
   "tsl_status": {
-    "two_day_cumul_pct": 2.07,
+    "two_day_cumul_pct": 3.65,
     "tsl_triggered": false,
     "in_cash": false,
     "current_z": 0.0,
     "z_reentry": 0.9,
     "tsl_pct": 12
   },
-  "tbill_rate": 3.62,
+  "tbill_rate": 3.61,
   "predictions": {},
   "trained_from_year": 2008,
   "trained_wavelet": "db4",
