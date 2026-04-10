@@ -1,88 +1,21 @@
 {
-  "as_of_date": "2026-04-09",
+  "as_of_date": "2026-04-10",
   "winner_model": "model_a",
-  "final_signal": "XLV",
-  "final_confidence": 0.0963,
+  "final_signal": "\u2014",
+  "final_confidence": null,
   "tsl_status": {
-    "two_day_cumul_pct": 3.48,
+    "two_day_cumul_pct": 4.51,
     "tsl_triggered": false,
     "in_cash": false,
-    "current_z": 2.24,
+    "current_z": 0.0,
     "z_reentry": 0.9,
     "tsl_pct": 12
   },
-  "tbill_rate": 3.62,
-  "predictions": {
-    "model_a": {
-      "model": "model_a",
-      "lookback": 45,
-      "wavelet": "haar",
-      "signal": "XLV",
-      "confidence": 0.0963,
-      "z_score": 2.24,
-      "probabilities": {
-        "QQQ": 0.0821,
-        "XLK": 0.0819,
-        "XLF": 0.0785,
-        "XLE": 0.0787,
-        "XLV": 0.0963,
-        "XLI": 0.0792,
-        "XLY": 0.091,
-        "XLP": 0.0767,
-        "XLU": 0.078,
-        "XME": 0.0885,
-        "GDX": 0.0866,
-        "IWM": 0.0823
-      }
-    },
-    "model_b": {
-      "model": "model_b",
-      "lookback": 45,
-      "wavelet": "haar",
-      "signal": "XLE",
-      "confidence": 0.2197,
-      "z_score": 2.09,
-      "probabilities": {
-        "QQQ": 0.0326,
-        "XLK": 0.0243,
-        "XLF": 0.1214,
-        "XLE": 0.2197,
-        "XLV": 0.0324,
-        "XLI": 0.0398,
-        "XLY": 0.0305,
-        "XLP": 0.0363,
-        "XLU": 0.1274,
-        "XME": 0.1936,
-        "GDX": 0.0939,
-        "IWM": 0.048
-      }
-    },
-    "model_c": {
-      "model": "model_c",
-      "lookback": 30,
-      "wavelet": "haar",
-      "signal": "XLE",
-      "confidence": 0.1077,
-      "z_score": 2.136,
-      "probabilities": {
-        "QQQ": 0.0846,
-        "XLK": 0.0929,
-        "XLF": 0.069,
-        "XLE": 0.1077,
-        "XLV": 0.0687,
-        "XLI": 0.0794,
-        "XLY": 0.0809,
-        "XLP": 0.0733,
-        "XLU": 0.0882,
-        "XME": 0.0936,
-        "GDX": 0.0709,
-        "IWM": 0.0907
-      }
-    }
-  },
-  "trained_from_year": 2020,
-  "trained_wavelet": "haar",
-  "trained_at": "2026-04-08T09:40:07.179597",
+  "tbill_rate": 3.61,
+  "predictions": {},
+  "trained_from_year": 2024,
+  "trained_wavelet": "db4",
+  "trained_at": "2026-04-09T11:06:16.236365",
   "universe": "equity",
   "etfs": [
     "QQQ",
@@ -95,6 +28,8 @@
     "XLP",
     "XLU",
     "XME",
+    "XLB",
+    "XLRE",
     "GDX",
     "IWM"
   ]
