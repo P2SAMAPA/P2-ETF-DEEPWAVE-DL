@@ -31,6 +31,9 @@ EQUITY_ETFS = [
     "XLRE",  # Real Estate
     "GDX",   # Gold Miners
     "IWM",   # Russell 2000 Small Cap
+    "IWF",
+    "XSD",
+    "XBI"
 ]
 
 ETFS        = FI_ETFS + EQUITY_ETFS   # all tradeable tickers → etf_price.parquet
