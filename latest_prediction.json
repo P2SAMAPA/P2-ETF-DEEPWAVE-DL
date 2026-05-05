@@ -1,10 +1,10 @@
 {
-  "as_of_date": "2026-05-04",
+  "as_of_date": "2026-05-05",
   "winner_model": "model_b",
   "final_signal": "\u2014",
   "final_confidence": null,
   "tsl_status": {
-    "two_day_cumul_pct": 5.18,
+    "two_day_cumul_pct": -0.19,
     "tsl_triggered": false,
     "in_cash": false,
     "current_z": 0.0,
