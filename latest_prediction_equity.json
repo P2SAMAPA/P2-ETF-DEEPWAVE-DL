@@ -1,17 +1,17 @@
 {
-  "as_of_date": "2026-06-02",
+  "as_of_date": "2026-06-03",
   "winner_model": "model_a",
   "final_signal": "\u2014",
   "final_confidence": null,
   "tsl_status": {
-    "two_day_cumul_pct": 4.63,
+    "two_day_cumul_pct": 4.31,
     "tsl_triggered": false,
     "in_cash": false,
     "current_z": 0.0,
     "z_reentry": 0.9,
     "tsl_pct": 12
   },
-  "tbill_rate": 3.6,
+  "tbill_rate": 3.63,
   "predictions": {},
   "trained_from_year": 2025,
   "trained_wavelet": "sym5",
